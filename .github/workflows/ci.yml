@@ -83,8 +83,13 @@ jobs:
       - run: pnpm install --dir apps/web || npm install --prefix apps/web
       - run: node --test test/tiers.test.mjs test/uploads.test.mjs test/e2ee.test.mjs
         working-directory: apps/web
-      - run: npx -y esbuild@0.24 app/page.tsx "app/s/[id]/page.tsx" app/me/page.tsx lib/tiers.ts lib/uploads.ts lib/e2ee.ts --jsx=automatic --outdir=/tmp/esbuild-check --log-level=warning
+      - run: npx -y esbuild@0.24 "app/**/*.tsx" "app/*.tsx" "lib/*.ts" "components/*.tsx" --jsx=automatic --outdir=/tmp/esbuild-check --log-level=warning
         working-directory: apps/web
+      - run: npm run build
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_BASE: http://localhost:8000
+          API_BASE: http://localhost:8000
 
   # Bonus live signal (freshclam on first boot is slow/flaky → non-blocking).
   quarantine-e2e:

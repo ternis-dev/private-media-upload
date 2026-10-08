@@ -10,7 +10,7 @@ function b64urlEncode(bytes: Uint8Array): string {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export function b64urlDecode(s: string): Uint8Array {
+export function b64urlDecode(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
   const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
   const out = new Uint8Array(bin.length);
@@ -18,14 +18,14 @@ export function b64urlDecode(s: string): Uint8Array {
   return out;
 }
 
-function xorNonce(base: Uint8Array, index: number): Uint8Array {
+function xorNonce(base: Uint8Array<ArrayBuffer>, index: number): Uint8Array<ArrayBuffer> {
   const n = base.slice();
   const view = new DataView(n.buffer, n.byteOffset, n.byteLength);
   view.setBigUint64(4, view.getBigUint64(4) ^ BigInt(index));
   return n;
 }
 
-async function importKey(raw: Uint8Array): Promise<CryptoKey> {
+async function importKey(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', raw as BufferSource, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
@@ -37,23 +37,23 @@ export interface E2eeManifest {
 }
 
 export interface EncryptedFile {
-  container: Uint8Array;
+  container: Uint8Array<ArrayBuffer>;
   keyB64: string;
 }
 
 /** Encrypt bytes → PWF1 container + fresh key. Chunk 0 = encrypted manifest. */
-export async function encryptFile(filename: string, mime: string, data: Uint8Array): Promise<EncryptedFile> {
+export async function encryptFile(filename: string, mime: string, data: Uint8Array<ArrayBuffer>): Promise<EncryptedFile> {
   const keyRaw = crypto.getRandomValues(new Uint8Array(32));
   const nonceBase = crypto.getRandomValues(new Uint8Array(12));
   const key = await importKey(keyRaw);
 
   const manifest = new TextEncoder().encode(JSON.stringify({ v: 1, filename, mime, size: data.length }));
-  const chunks: Uint8Array[] = [manifest];
+  const chunks: Uint8Array<ArrayBuffer>[] = [manifest];
   for (let off = 0; off < data.length; off += E2EE_CHUNK_BYTES) {
     chunks.push(data.subarray(off, off + E2EE_CHUNK_BYTES));
   }
 
-  const parts: Uint8Array[] = [];
+  const parts: Uint8Array<ArrayBuffer>[] = [];
   const header = new Uint8Array(4 + 4 + 12 + 8);
   new TextEncoder().encodeInto(E2EE_MAGIC, header);
   const hv = new DataView(header.buffer);
@@ -82,11 +82,11 @@ export async function encryptFile(filename: string, mime: string, data: Uint8Arr
 export interface DecryptedFile {
   filename: string;
   mime: string;
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
 }
 
 /** Decrypt + verify a PWF1 container. Throws on tamper / wrong key / bad format. */
-export async function decryptContainer(container: Uint8Array, keyB64: string): Promise<DecryptedFile> {
+export async function decryptContainer(container: Uint8Array<ArrayBuffer>, keyB64: string): Promise<DecryptedFile> {
   const key = await importKey(b64urlDecode(keyB64));
   if (container.length < 28 || new TextDecoder().decode(container.subarray(0, 4)) !== E2EE_MAGIC) {
     throw new Error('not a PWF1 container');
@@ -95,7 +95,7 @@ export async function decryptContainer(container: Uint8Array, keyB64: string): P
   const nonceBase = container.subarray(8, 20);
   const origSize = Number(hv.getBigUint64(20));
 
-  const plains: Uint8Array[] = [];
+  const plains: Uint8Array<ArrayBuffer>[] = [];
   let off = 28;
   let index = 0;
   while (off < container.length) {

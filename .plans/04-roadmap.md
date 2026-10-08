@@ -28,6 +28,7 @@
 
 ## M4 — beta (DE) ✅ READY (closed beta; no public launch yet)
 - [x] Thumbnails (GD images, ffmpeg first-frame; never for E2EE; purge-safe; `?thumb=1` gated previews)
+- [x] Web UI rework: dark-first design system (Tailwind v4), drag-drop uploader with tier cards + progress state machine, share pages (preview, decrypt, views/expiry, abuse reports), account dashboard (quota meter, per-share delete, ZIP export); `next build` green + SSR-verified
 - [x] Abuse reports (endpoint + `pwf:reports` review queue) + threat-model A5 workflow
 - [x] Deep health + security headers (incl. conditional HSTS, no-referrer for fragments)
 - [x] Prod stack: Dockerfiles, standalone prod compose (api/worker/nginx/web/pgsql/clamav), Terraform R2+DNS+TLS (**validated** vs provider v5 schema), `pwf:backup` + runbook (restore-then-purge), CHANGELOG, release workflow
