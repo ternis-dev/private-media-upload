@@ -67,6 +67,7 @@ export interface CompleteOptions {
   password?: string;
   maxViews?: number;
   burn?: boolean;
+  e2ee?: boolean;
 }
 
 export async function completeUpload(
@@ -78,6 +79,7 @@ export async function completeUpload(
   if (opts.password) body.password = opts.password;
   if (opts.maxViews) body.maxViews = opts.maxViews;
   if (opts.burn) body.burn = true;
+  if (opts.e2ee) body.e2ee = true;
   const res = await fetch(`${apiBase}/v1/uploads/${uploadId}/complete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -23,7 +23,8 @@
 - [x] Quarantine worker `bin/quarantine.php` closes R1 (streams unscanned assets via readRange, deletes shares+bytes on hit; skips cleanly w/o daemon; EICAR CI job non-blocking)
 - [x] ADR-0004 (domain-before-framework), threat-model A8/R1-closed/R4-retired, Löschkonzept account cascade, openapi 0.3.0-M2b
 - [ ] M3a: Laravel 12/13 port (spec = this codebase: Eloquent mirrors schema, controllers wrap UploadService, Sanctum/OIDC, Horizon purge+quarantine, Redis throttle)
-- [ ] M3b: browser AES-GCM E2EE (key in #fragment), thumbnails, abuse-report flow
+- [x] M3b E2EE core: AES-256-GCM PWF1 containers (key in #fragment, server blind) — format doc, 7 crypto tests (multi-chunk, tamper/wrong-key fail-closed), server opaqueness tests, quarantine-skip, web encrypt/decrypt wired, full-loop live proof (ciphertext on disk, IDENTICAL decrypt)
+- [ ] M3c (deferred): thumbnails, abuse-report flow, E2EE streaming decrypt >1 GB
 
 ## M3 — E2EE + polish
 - Browser AES-GCM E2EE (key in `#fragment`), server-blind test.

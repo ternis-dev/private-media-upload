@@ -224,6 +224,7 @@ if ($method === 'POST' && preg_match('#^/v1/uploads/(up_[0-9A-Za-z]{8,32})/compl
             'password' => $body['password'] ?? null,
             'maxViews' => $body['maxViews'] ?? null,
             'burn' => $body['burn'] ?? false,
+            'e2ee' => $body['e2ee'] ?? false,
         ]), 201);
     } catch (\InvalidArgumentException $e) {
         $json(['error' => $e->getMessage()], 422);
@@ -253,6 +254,7 @@ if ($method === 'POST' && $path === '/v1/uploads/l1-complete') {
                 'password' => $body['password'] ?? null,
                 'maxViews' => $body['maxViews'] ?? null,
                 'burn' => $body['burn'] ?? false,
+                'e2ee' => $body['e2ee'] ?? false,
             ], $owner['id'] ?? null), 201);
     } catch (\InvalidArgumentException $e) {
         $json(['error' => $e->getMessage()], 422);

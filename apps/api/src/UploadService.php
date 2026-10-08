@@ -99,6 +99,7 @@ final class UploadService
     public function complete(string $uploadId, StorageDriverInterface $driver, array $opts = []): array
     {
         [$passwordHash, $maxViews, $burn] = self::validateShareOptions($opts);
+        $e2ee = !empty($opts['e2ee']) ? 1 : 0;
         $up = $this->store->getUpload($uploadId);
         if ($up === null || $up['status'] !== 'open') {
             throw new \RuntimeException('unknown or closed upload');
@@ -109,14 +110,14 @@ final class UploadService
             throw new \RuntimeException(
                 "incomplete upload: received {$up['received']}/{$up['expected']} bytes, staging {$actual}");
         }
-        $this->scan($staging);
+        $this->scan($staging, $e2ee);
         $sha = hash_file('sha256', $staging);
-        $mime = $this->resolveMime($staging, $up['mime']);
+        $mime = $e2ee === 1 ? $up['mime'] : $this->resolveMime($staging, $up['mime']);
         $driver->putFile($up['storage_key'], $staging);
         $this->store->markComplete($uploadId);
         unlink($staging);
         return $this->mintShare($up['tier'], $up['storage_key'], $actual, $sha, $mime, $up['filename'],
-            $passwordHash, $maxViews, $burn, $up['owner_id'] ?? null, $this->scanner !== null ? 1 : 0);
+            $passwordHash, $maxViews, $burn, $up['owner_id'] ?? null, $this->scanner !== null && $e2ee === 0 ? 1 : 0, $e2ee);
     }
 
     /**
@@ -128,6 +129,7 @@ final class UploadService
     public function completeL1(string $key, string $filename, int $size, string $mime, R2S3Driver $driver, array $opts = [], ?string $ownerId = null): array
     {
         [$passwordHash, $maxViews, $burn] = self::validateShareOptions($opts);
+        $e2ee = !empty($opts['e2ee']) ? 1 : 0;
         [$ok, $err] = Shares::validateInit(['tier' => 'L1', 'filename' => $filename, 'size' => $size, 'mime' => $mime]);
         if (!$ok) {
             throw new \InvalidArgumentException($err);
@@ -140,7 +142,7 @@ final class UploadService
             throw new \RuntimeException("size mismatch: declared {$size}, stored {$actual}");
         }
         $sha = hash('sha256', $driver->get($key));
-        return $this->mintShare('L1', $key, $actual, $sha, $mime, $filename, $passwordHash, $maxViews, $burn, $ownerId, 0);
+        return $this->mintShare('L1', $key, $actual, $sha, $mime, $filename, $passwordHash, $maxViews, $burn, $ownerId, 0, $e2ee);
     }
 
     /**
@@ -206,7 +208,7 @@ final class UploadService
         ];
     }
 
-    /** @return null|array{id,tier,badge,residency,filename,mime,size,sha256,expiresAt,expired,revoked,hasPassword,views,maxViews,burn} */
+    /** @return null|array{id,tier,badge,residency,filename,mime,size,sha256,expiresAt,expired,revoked,hasPassword,views,maxViews,burn,e2ee} */
     public function meta(string $shareId): ?array
     {
         if (!Shares::validId($shareId)) {
@@ -232,6 +234,7 @@ final class UploadService
             'views' => (int) $row['views'],
             'maxViews' => $row['max_views'] === null ? null : (int) $row['max_views'],
             'burn' => (int) $row['burn'] === 1,
+            'e2ee' => (int) ($row['e2ee'] ?? 0) === 1,
         ];
     }
 
@@ -248,14 +251,14 @@ final class UploadService
     }
 
     /** @return array{shareId,shareUrl,tier,size,sha256,mime,expiresAt} */
-    private function mintShare(string $tier, string $storageKey, int $size, string $sha, string $mime, string $filename, ?string $passwordHash = null, ?int $maxViews = null, int $burn = 0, ?string $ownerId = null, int $scanned = 0): array
+    private function mintShare(string $tier, string $storageKey, int $size, string $sha, string $mime, string $filename, ?string $passwordHash = null, ?int $maxViews = null, int $burn = 0, ?string $ownerId = null, int $scanned = 0, int $e2ee = 0): array
     {
         $now = time();
         $assetId = 'as_' . Shares::newId(16);
         $this->store->createAsset([
             'id' => $assetId, 'tier' => $tier, 'storage_key' => $storageKey,
             'size' => $size, 'sha256' => $sha, 'mime' => $mime, 'filename' => $filename, 'now' => $now,
-        ], $ownerId, $scanned);
+        ], $ownerId, $scanned, $e2ee);
         $shareId = Shares::newId();
         $expires = Shares::defaultExpiryUnix($tier);
         $this->store->createShare([
@@ -270,10 +273,10 @@ final class UploadService
         ];
     }
 
-    /** Inline malware scan (skipped when no scanner configured). */
-    private function scan(string $stagingPath): void
+    /** Inline malware scan (skipped when no scanner, or for ciphertext). */
+    private function scan(string $stagingPath, int $e2ee = 0): void
     {
-        if ($this->scanner === null) {
+        if ($this->scanner === null || $e2ee === 1) {
             return;
         }
         $virus = ($this->scanner)($stagingPath);
@@ -393,13 +396,20 @@ final class UploadService
 
     /**
      * Quarantine worker (closes R1): stream every unscanned asset to a temp
-     * file in 1 MiB slices, scan, quarantine on hit. @return array{scanned,quarantined}
+     * file in 1 MiB slices, scan, quarantine on hit. E2EE ciphertext is
+     * unscannable → recorded as skipped (2). @return array{scanned,quarantined,skipped}
      */
     public function quarantineUnscanned(callable $driverFor, callable $scanner, string $tmpDir, int $limit = 50): array
     {
         $done = 0;
         $bad = 0;
+        $skipped = 0;
         foreach ($this->store->unscannedAssets($limit) as $asset) {
+            if ((int) ($asset['e2ee'] ?? 0) === 1) {
+                $this->store->markScanSkipped($asset['id']);
+                $skipped++;
+                continue;
+            }
             $driver = $driverFor($asset['tier']);
             $tmp = $tmpDir . '/q-' . bin2hex(random_bytes(8)) . '.bin';
             try {
@@ -426,7 +436,7 @@ final class UploadService
             $this->store->markScanned($asset['id']);
             $done++;
         }
-        return ['scanned' => $done, 'quarantined' => $bad];
+        return ['scanned' => $done, 'quarantined' => $bad, 'skipped' => $skipped];
     }
 
     /** Per-user GDPR manifest (authenticated). */

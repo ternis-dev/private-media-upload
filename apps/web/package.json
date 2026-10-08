@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "lint": "next lint",
-    "test": "node --test test/tiers.test.mjs test/uploads.test.mjs"
+    "test": "node --test test/tiers.test.mjs test/uploads.test.mjs test/e2ee.test.mjs"
   },
   "dependencies": {
     "next": "^15.0.0",

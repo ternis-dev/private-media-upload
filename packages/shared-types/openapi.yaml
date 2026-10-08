@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: private.wf API
-  version: 0.3.0-M2b
-  description: M2b: accounts (register/login/Bearer), ownership + quotas, tus 1.0.0 subset, quarantine worker, per-user GDPR ZIP/cascade.
+  version: 0.4.0-M3
+  description: M3 E2EE: AES-256-GCM PWF1 containers (key in #fragment, server blind). Complete opts gain e2ee flag; meta exposes e2ee; quarantine skips ciphertext.
 servers:
   - url: http://localhost:8000
 paths:
@@ -101,7 +101,7 @@ paths:
         '200': { description: '{received, expected, done}' }
   /v1/uploads/{uploadId}/complete:
     post:
-      summary: Verify size/sha256, scan, streaming putFile, mint share (opts: password 8..256, maxViews 1..100000, burn)
+      summary: Verify size/sha256, scan (skipped for e2ee ciphertext), streaming putFile, mint share (opts: password 8..256, maxViews 1..100000, burn, e2ee)
       parameters:
         - { name: uploadId, in: path, required: true, schema: { type: string } }
       responses:
@@ -126,6 +126,7 @@ paths:
                 password: { type: string, minLength: 8, maxLength: 256 }
                 maxViews: { type: integer, minimum: 1, maximum: 100000 }
                 burn: { type: boolean }
+                e2ee: { type: boolean, description: 'PWF1 ciphertext; server skips sniff+scan, stores opaque' }
       responses:
         '201': { description: share }
         '422': { description: object missing / size mismatch }
@@ -135,7 +136,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, pattern: '^[0-9A-Za-z]{8,32}$' } }
       responses:
-        '200': { description: '{tier, badge, residency, filename, mime, size, sha256, expiresAt, hasPassword, views, maxViews, burn}' }
+        '200': { description: '{tier, badge, residency, filename, mime, size, sha256, expiresAt, hasPassword, views, maxViews, burn, e2ee}' }
         '401': { description: password required / wrong }
         '404': { description: unknown (or purged) }
         '410': { description: expired / revoked / view limit reached }

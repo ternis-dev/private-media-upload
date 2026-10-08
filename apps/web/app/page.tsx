@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { TIERS, type TierId } from '../lib/tiers';
 import { CHUNK_BYTES, appendChunk, completeUpload, initUpload } from '../lib/uploads';
+import { encryptFile } from '../lib/e2ee';
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 
@@ -10,6 +11,7 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState('');
   const [burn, setBurn] = useState(false);
+  const [e2ee, setE2ee] = useState(false);
   const [progress, setProgress] = useState('');
   const [share, setShare] = useState('');
 
@@ -19,22 +21,38 @@ export default function Home() {
       return;
     }
     try {
+      let name = file.name;
+      let mime = file.type || 'application/octet-stream';
+      let bytes = new Uint8Array(await file.arrayBuffer());
+      let keyFrag = '';
+      if (e2ee) {
+        if (file.size > 1024 * 1024 * 1024) {
+          setProgress('E2EE limited to 1 GB in this version (streaming decrypt lands later)');
+          return;
+        }
+        setProgress('encrypting in browser…');
+        const enc = await encryptFile(file.name, mime, bytes);
+        bytes = enc.container;
+        keyFrag = `#k=${enc.keyB64}`;
+        name = `${file.name}.pwf1`;
+        mime = 'application/octet-stream';
+      }
       setProgress('reserving…');
-      const init = await initUpload(API, { tier, filename: file.name, size: file.size, mime: file.type || 'application/octet-stream' });
+      const init = await initUpload(API, { tier, filename: name, size: bytes.length, mime });
       let offset = 0;
-      while (offset < file.size) {
-        const chunk = file.slice(offset, offset + CHUNK_BYTES);
-        const p = await appendChunk(API, init.uploadId, chunk);
+      while (offset < bytes.length) {
+        const p = await appendChunk(API, init.uploadId, new Blob([bytes.subarray(offset, offset + CHUNK_BYTES)]));
         offset = p.received;
-        setProgress(`uploading… ${((offset / file.size) * 100).toFixed(0)}% (${init.tier})`);
+        setProgress(`uploading… ${((offset / bytes.length) * 100).toFixed(0)}% (${init.tier}${e2ee ? ', E2EE 🔒' : ''})`);
       }
       setProgress('finalizing…');
       const done = await completeUpload(API, init.uploadId, {
         password: password || undefined,
         burn: burn || undefined,
+        e2ee: e2ee || undefined,
       });
-      setShare(done.shareUrl);
-      setProgress('done ✓');
+      setShare(done.shareUrl + keyFrag);
+      setProgress(e2ee ? 'done ✓ — server never saw plaintext (key only in link fragment)' : 'done ✓');
     } catch (e) {
       setProgress(`failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -60,6 +78,11 @@ export default function Home() {
       <div>
         <label>
           <input type="checkbox" checked={burn} onChange={(e) => setBurn(e.target.checked)} /> burn after first read
+        </label>
+      </div>
+      <div>
+        <label>
+          <input type="checkbox" checked={e2ee} onChange={(e) => setE2ee(e.target.checked)} /> 🔒 end-to-end encrypt (key stays in link fragment, server sees ciphertext)
         </label>
       </div>
       <div style={{ marginTop: 12 }}>

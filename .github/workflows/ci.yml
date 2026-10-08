@@ -53,7 +53,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '22', cache: 'pnpm', cache-dependency-path: apps/web/pnpm-lock.yaml }
       - run: pnpm install --dir apps/web || npm install --prefix apps/web
-      - run: node --test test/tiers.test.mjs test/uploads.test.mjs
+      - run: node --test test/tiers.test.mjs test/uploads.test.mjs test/e2ee.test.mjs
         working-directory: apps/web
       - run: npx -y esbuild@0.24 app/page.tsx "app/s/[id]/page.tsx" app/me/page.tsx lib/tiers.ts lib/uploads.ts lib/e2ee.ts --jsx=automatic --outdir=/tmp/esbuild-check --log-level=warning
         working-directory: apps/web

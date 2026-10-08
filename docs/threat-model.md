@@ -6,8 +6,8 @@ Scope: lean-PHP M1/M2a stack (SQLite, no accounts yet). Updated per milestone; L
 | # | Attacker | Capability | Out of scope? |
 |---|---|---|---|
 | A1 | Link guesser | internet, high request rate | No — 12-char base62 ids (~71 bit) + 60/min/IP share gate |
-| A2 | Curious storage operator (L1/L2 hoster) | reads disks/buckets at rest | Partially — random keys, no listing; content visible unless E2EE (M3) |
-| A3 | Curious server admin (us) | DB + vault access | Partially — argon2id password hashes (not plaintext), audit log; E2EE (M3) removes content |
+| A2 | Curious storage operator (L1/L2 hoster) | reads disks/buckets at rest | Partially — random keys, no listing; content visible unless **E2EE (M3: ciphertext only, key in fragment)** |
+| A3 | Curious server admin (us) | DB + vault access | Partially — argon2id hashes, audit log; **E2EE shares: ciphertext only (filenames/mime hidden in encrypted manifest)** |
 | A4 | Malware uploader | uploads EICAR-class payloads | No — ClamAV inline scan on staged path (M2a), direct-to-R2 deferred to async worker (M2b, tracked risk R1) |
 | A5 | Abuser (CSAM/extremism) | shares illegal content | Reporting flow M3; hashes (PhotoDNA-style) explicitly non-goal v1 |
 | A6 | Passive network observer | taps traffic | No — TLS terminates at edge (infra); HMAC/SigV4 URLs expire (15 min / 5 min L1-real) |
@@ -35,3 +35,9 @@ Scope: lean-PHP M1/M2a stack (SQLite, no accounts yet). Updated per milestone; L
   accounts: owned shares manageable + erasable per-user; anonymous shares keep
   the 71-bit + rate-limit bar (documented until accounts become mandatory).
 - **R5 (accepted):** `?password=` query fallback leaks into access logs/proxies — header preferred, web client uses header; query kept for curl ergonomics.
+- **R7 (new M3, accepted):** E2EE shares bypass server-side AV (ciphertext unscannable;
+  quarantine records skip). Recipients must scan after decrypt — stated in UI copy
+  and `docs/e2ee-format.md`. E2EE + password compose for defense in depth.
+- **R8 (new M3, accepted):** E2EE key in URL fragment leaks via browser history /
+  referer only if a page navigates with the fragment (fragments are never sent to
+  servers). Share links must be copied whole; key loss = data loss (no recovery).

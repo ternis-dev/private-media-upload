@@ -1,5 +1,6 @@
 'use client';
 import { use, useCallback, useEffect, useState } from 'react';
+import { decryptContainer, parseShareKey } from '../../lib/e2ee';
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 
@@ -16,6 +17,7 @@ interface Meta {
   views: number;
   maxViews: number | null;
   burn: boolean;
+  e2ee: boolean;
 }
 
 export default function SharePage({ params }: { params: Promise<{ id: string }> }) {
@@ -69,15 +71,33 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
         setError(`Download failed (${res.status}). The link may be used up.`);
         return;
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = meta.filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (meta.e2ee) {
+        const key = parseShareKey(window.location.hash);
+        if (!key) {
+          setError('This is an end-to-end encrypted share — open the full link including #k=… (the key never leaves your browser).');
+          return;
+        }
+        const ct = new Uint8Array(await res.arrayBuffer());
+        const dec = await decryptContainer(ct, key);
+        const url = URL.createObjectURL(new Blob([dec.data as BlobPart], { type: dec.mime }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = dec.filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = meta.filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
       // Burn/max-views shares die server-side on read — refresh state.
       if (meta.burn || meta.maxViews !== null) void load(password || undefined);
+    } catch (e) {
+      setError(`Decrypt failed: ${e instanceof Error ? e.message : String(e)} (wrong key or tampered data?)`);
     } finally {
       setDownloading(false);
     }
@@ -105,6 +125,7 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
           </p>
           <p>
             <strong>{meta.tier}</strong> <em>{meta.badge}</em> · residency {meta.residency}
+            {meta.e2ee && ' · 🔒 end-to-end encrypted (only this browser can read it)'}
             {meta.burn && ' · 🔥 burns after first read'}
             {meta.maxViews !== null && ` · ${meta.views}/${meta.maxViews} views`}
           </p>

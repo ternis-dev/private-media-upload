@@ -91,7 +91,8 @@ final class Store
         }
         // M2b columns.
         foreach (['uploads' => ['owner_id' => 'TEXT NULL'],
-                  'assets' => ['owner_id' => 'TEXT NULL', 'scanned' => 'INTEGER NOT NULL DEFAULT 0'],
+                  'assets' => ['owner_id' => 'TEXT NULL', 'scanned' => 'INTEGER NOT NULL DEFAULT 0',
+                               'e2ee' => 'INTEGER NOT NULL DEFAULT 0'],
         ] as $table => $cols) {
             $existing = $pdo->query("PRAGMA table_info({$table})")->fetchAll(PDO::FETCH_COLUMN, 1);
             foreach ($cols as $col => $ddl) {
@@ -158,12 +159,12 @@ final class Store
         $st->execute(['id' => $id]);
     }
 
-    public function createAsset(array $row, ?string $ownerId = null, int $scanned = 0): void
+    public function createAsset(array $row, ?string $ownerId = null, int $scanned = 0, int $e2ee = 0): void
     {
         $st = $this->pdo->prepare(
-            'INSERT INTO assets(id,tier,storage_key,size,sha256,mime,filename,created_at,owner_id,scanned)
-             VALUES(:id,:tier,:storage_key,:size,:sha256,:mime,:filename,:now,:owner,:scanned)');
-        $st->execute($row + ['owner' => $ownerId, 'scanned' => $scanned]);
+            'INSERT INTO assets(id,tier,storage_key,size,sha256,mime,filename,created_at,owner_id,scanned,e2ee)
+             VALUES(:id,:tier,:storage_key,:size,:sha256,:mime,:filename,:now,:owner,:scanned,:e2ee)');
+        $st->execute($row + ['owner' => $ownerId, 'scanned' => $scanned, 'e2ee' => $e2ee]);
     }
 
     public function createShare(array $row): void
@@ -178,7 +179,7 @@ final class Store
     public function getShare(string $id): ?array
     {
         $st = $this->pdo->prepare(
-            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned
+            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned,a.e2ee
              FROM shares s JOIN assets a ON a.id=s.asset_id WHERE s.id=:id');
         $st->execute(['id' => $id]);
         $row = $st->fetch();
@@ -189,7 +190,7 @@ final class Store
     public function getShareByKey(string $storageKey): ?array
     {
         $st = $this->pdo->prepare(
-            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned
+            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned,a.e2ee
              FROM shares s JOIN assets a ON a.id=s.asset_id WHERE a.storage_key=:k');
         $st->execute(['k' => $storageKey]);
         $row = $st->fetch();
@@ -405,11 +406,11 @@ final class Store
         return $st->fetchAll();
     }
 
-    /** @return list<array{id,tier,storage_key,size,filename}> */
+    /** @return list<array{id,tier,storage_key,size,filename,e2ee}> */
     public function unscannedAssets(int $limit = 50): array
     {
         $st = $this->pdo->prepare(
-            'SELECT id,tier,storage_key,size,filename FROM assets WHERE scanned=0 ORDER BY created_at ASC LIMIT :lim');
+            'SELECT id,tier,storage_key,size,filename,e2ee FROM assets WHERE scanned=0 ORDER BY created_at ASC LIMIT :lim');
         $st->bindValue(':lim', $limit, PDO::PARAM_INT);
         $st->execute();
         return $st->fetchAll();
@@ -418,6 +419,13 @@ final class Store
     public function markScanned(string $assetId): void
     {
         $st = $this->pdo->prepare('UPDATE assets SET scanned=1 WHERE id=:id');
+        $st->execute(['id' => $assetId]);
+    }
+
+    /** Ciphertext is unscannable: record skip (2) so the worker doesn't loop. */
+    public function markScanSkipped(string $assetId): void
+    {
+        $st = $this->pdo->prepare('UPDATE assets SET scanned=2 WHERE id=:id');
         $st->execute(['id' => $assetId]);
     }
 

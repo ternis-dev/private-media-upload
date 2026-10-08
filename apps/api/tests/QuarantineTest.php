@@ -39,7 +39,7 @@ final class QuarantineTest extends TestCase
         $this->assertSame(0, (int) $this->store->getShare($done['shareId'])['scanned']);
 
         $res = $this->svc->quarantineUnscanned(fn () => $d, static fn (): ?string => null, $this->tmp);
-        $this->assertSame(['scanned' => 1, 'quarantined' => 0], $res);
+        $this->assertSame(['scanned' => 1, 'quarantined' => 0, 'skipped' => 0], $res);
         $this->assertSame(1, (int) $this->store->getShare($done['shareId'])['scanned']);
         $this->assertNotNull($this->svc->meta($done['shareId'])); // untouched
     }
@@ -49,7 +49,7 @@ final class QuarantineTest extends TestCase
         [$d, $done] = $this->directL1('evil.bin', 'EICAR-payload');
         $res = $this->svc->quarantineUnscanned(
             fn () => $d, static fn (string $p): ?string => str_contains(file_get_contents($p), 'EICAR') ? 'Eicar' : null, $this->tmp);
-        $this->assertSame(['scanned' => 0, 'quarantined' => 1], $res);
+        $this->assertSame(['scanned' => 0, 'quarantined' => 1, 'skipped' => 0], $res);
         $this->assertFalse($d->exists('u/l1/evil.bin'));
         $this->assertNull($this->svc->meta($done['shareId']));
     }
