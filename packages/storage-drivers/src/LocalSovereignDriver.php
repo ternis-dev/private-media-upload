@@ -108,6 +108,37 @@ final class LocalSovereignDriver implements StorageDriverInterface
         return hash_equals($expected, $sig);
     }
 
+    public function readRange(string $key, int $offset, int $length): string
+    {
+        if ($offset < 0 || $length < 1) {
+            throw new \InvalidArgumentException('invalid range');
+        }
+        $abs = $this->localPath($key);
+        if (!is_file($abs)) {
+            throw new \RuntimeException("not found: {$key}");
+        }
+        $fh = fopen($abs, 'rb');
+        if ($fh === false) {
+            throw new \RuntimeException("not found: {$key}");
+        }
+        try {
+            fseek($fh, $offset);
+            $out = '';
+            $left = $length;
+            while ($left > 0 && !feof($fh)) {
+                $chunk = fread($fh, min(8192, $left));
+                if ($chunk === false || $chunk === '') {
+                    break;
+                }
+                $out .= $chunk;
+                $left -= strlen($chunk);
+            }
+            return $out;
+        } finally {
+            fclose($fh);
+        }
+    }
+
     private function path(string $key): string
     {
         return $this->localPath($key);

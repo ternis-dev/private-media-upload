@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHUNK_BYTES, chunkCount, parseShareId } from '../lib/uploads.ts';
+import { CHUNK_BYTES, chunkCount, parseShareId, completeUpload } from '../lib/uploads.ts';
 
 describe('uploads', () => {
   it('chunks in 4 MB units', () => {
@@ -17,5 +17,21 @@ describe('uploads', () => {
     assert.equal(parseShareId('https://private.wf/s/abcDEF123456?x=1'), 'abcDEF123456');
     assert.equal(parseShareId('../etc/passwd'), null);
     assert.equal(parseShareId('short'), null);
+  });
+  it('complete forwards share options as JSON', async () => {
+    const seen = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      seen.push([url, init]);
+      return new Response(JSON.stringify({ shareId: 'x'.repeat(12), shareUrl: 'http://localhost:3000/s/' + 'x'.repeat(12) }), { status: 201 });
+    };
+    try {
+      await completeUpload('http://api', 'up_' + 'y'.repeat(16), { password: 'pw-12345678', burn: true });
+    } finally {
+      globalThis.fetch = orig;
+    }
+    assert.equal(seen.length, 1);
+    assert.match(seen[0][0], /\/v1\/uploads\/up_/);
+    assert.deepEqual(JSON.parse(seen[0][1].body), { password: 'pw-12345678', burn: true });
   });
 });

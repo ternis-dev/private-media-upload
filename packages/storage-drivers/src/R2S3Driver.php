@@ -132,6 +132,25 @@ final class R2S3Driver implements StorageDriverInterface
         }
     }
 
+    public function readRange(string $key, int $offset, int $length): string
+    {
+        if ($offset < 0 || $length < 1) {
+            throw new \InvalidArgumentException('invalid range');
+        }
+        if ($this->client === null) {
+            return $this->emu()->readRange($key, $offset, $length);
+        }
+        try {
+            $res = $this->client->getObject([
+                'Bucket' => $this->bucket, 'Key' => $key,
+                'Range' => "bytes={$offset}-" . ($offset + $length - 1),
+            ]);
+            return (string) $res['Body'];
+        } catch (\Throwable $e) {
+            throw new \RuntimeException("not found: {$key}", 0, $e);
+        }
+    }
+
     public function exists(string $key): bool
     {
         if ($this->client === null) {
@@ -174,10 +193,12 @@ final class R2S3Driver implements StorageDriverInterface
         return (string) $this->client->createPresignedRequest($cmd, '+' . $ttlSeconds . ' seconds')->getUri();
     }
 
-    /** Emulation-only: verify an HMAC blob URL (real mode uses SigV4). */
+    /** Emulation: verify an HMAC blob URL. Real mode: SigV4 verifies itself → false. */
     public function verifySignedUrl(string $key, int $expires, string $sig): bool
     {
-        $this->requireEmu();
+        if ($this->client !== null) {
+            return false;
+        }
         return $this->emu()->verifySignedUrl($key, $expires, $sig);
     }
 

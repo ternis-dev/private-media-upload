@@ -14,6 +14,14 @@ interface StorageDriverInterface
     /** Store file at $path under $key without loading it into memory. */
     public function putFile(string $key, string $path, array $meta = []): void;
 
+    /**
+     * Read up to $length bytes at $offset (for Range streaming without
+     * loading whole objects). Returns fewer bytes at EOF.
+     *
+     * @throws \RuntimeException when key does not exist
+     */
+    public function readRange(string $key, int $offset, int $length): string;
+
     /** @throws \RuntimeException when key does not exist */
     public function get(string $key): string;
 
@@ -26,4 +34,7 @@ interface StorageDriverInterface
 
     /** Short-lived read URL. Must embed expiry; must not leak credentials. */
     public function signedGetUrl(string $key, int $ttlSeconds = 900): string;
+
+    /** Verify a URL produced by signedGetUrl (HMAC tiers; SigV4 verifies itself). */
+    public function verifySignedUrl(string $key, int $expires, string $sig): bool;
 }

@@ -16,12 +16,14 @@
 - [x] `packages/shared-types/openapi.yaml` v0.1.0-M1
 - DoD: upload 100 MB → share → expiry → bytes gone (covered by test). ✅ proven 2026-10-08
 
-## M2 — L2 vault + hardening + Laravel migration (2–3 wks)
-- Laravel 12/13 API migration (per ADR-0001; port Store/UploadService/Drivers + pgsql)
-- SFTP driver (Hetzner Storage Box compat) + tus proxy + LUKS notes.
-- Password shares, max-views/burn, rate limits, ClamAV, audit log.
-- GDPR export/delete + Löschkonzept doc.
-- DoD: pentest checklist pass (guess-rate, headers, purge <24h).
+## M2 — split: M2a hardening ✅ DONE / M2b Laravel + async workers (next)
+- [x] Real SFTP L2 driver (phpseclib, env-gated live test in CI; emulation fallback)
+- [x] Share security: argon2id passwords, max-views (atomic), burn-after-read (live 200→404 proof), revoke-now + purge sweep
+- [x] Rate limits (SQLite fixed-window, live 429 proof) + PII-minimized audit log + capability GDPR export/delete
+- [x] ClamAV INSTREAM hook on staged path (skippable dev default; direct-to-R2 gap R1 tracked)
+- [x] `docs/threat-model.md`, `docs/gdpr/loeschkonzept.md`, `docs/adr/0003-share-security.md`, openapi 0.2.0-M2a
+- [ ] M2b: Laravel 12/13 migration (port Store/UploadService/Drivers → pgsql + Horizon), S3-event AV quarantine worker (closes R1), Redis throttle, accounts + per-user GDPR cascade, tus proxy
+- DoD: pentest checklist pass (guess-rate, headers, purge <24h). — partial: automated proofs green (429/401/410/200→404, purge<24h by cron); full checklist with auth in M2b
 
 ## M3 — E2EE + polish
 - Browser AES-GCM E2EE (key in `#fragment`), server-blind test.

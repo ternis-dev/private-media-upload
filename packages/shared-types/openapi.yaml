@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: private.wf API
-  version: 0.1.0-M1
-  description: Single source of truth for apps/api + apps/web. M1: chunked byte flows for all tiers, real SigV4 for L1, Range streaming, purge CLI.
+  version: 0.2.0-M2a
+  description: M2a: share security (argon2id password, max-views/burn, revoke), rate limits (429), audit-backed GDPR export, ClamAV hook, real SFTP L2.
 servers:
   - url: http://localhost:8000
 paths:
@@ -50,15 +50,16 @@ paths:
         '200': { description: '{received, expected, done}' }
   /v1/uploads/{uploadId}/complete:
     post:
-      summary: Verify size/sha256, streaming putFile into tier driver, mint share
+      summary: Verify size/sha256, scan, streaming putFile, mint share (opts: password 8..256, maxViews 1..100000, burn)
       parameters:
         - { name: uploadId, in: path, required: true, schema: { type: string } }
       responses:
         '201': { description: '{shareId, shareUrl, size, sha256, expiresAt}' }
-        '422': { description: incomplete upload }
+        '422': { description: incomplete upload / bad opts / malware }
+        '429': { description: rate limited }
   /v1/uploads/l1-complete:
     post:
-      summary: Finalize browser-direct-to-R2 upload (server verifies existence + size)
+      summary: Finalize browser-direct-to-R2 upload (same share opts; AV scan deferred to worker)
       requestBody:
         required: true
         content:
@@ -71,18 +72,42 @@ paths:
                 filename: { type: string }
                 size: { type: integer, minimum: 1 }
                 mime: { type: string }
+                password: { type: string, minLength: 8, maxLength: 256 }
+                maxViews: { type: integer, minimum: 1, maximum: 100000 }
+                burn: { type: boolean }
       responses:
         '201': { description: share }
         '422': { description: object missing / size mismatch }
   /v1/shares/{id}/meta:
     get:
-      summary: Share metadata (no bytes)
+      summary: Share metadata (no bytes). Password via X-Share-Password header (or ?password=).
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, pattern: '^[0-9A-Za-z]{8,32}$' } }
       responses:
-        '200': { description: '{tier, badge, residency, filename, mime, size, sha256, expiresAt}' }
+        '200': { description: '{tier, badge, residency, filename, mime, size, sha256, expiresAt, hasPassword, views, maxViews, burn}' }
+        '401': { description: password required / wrong }
         '404': { description: unknown (or purged) }
-        '410': { description: expired, purge pending }
+        '410': { description: expired / revoked / view limit reached }
+        '429': { description: rate limited (60/min/IP) }
+  /v1/shares/{id}/export:
+    get:
+      summary: Capability-based GDPR manifest (metadata + access log + retention note)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: manifest }
+        '401': { description: password required / wrong }
+        '404': { description: unknown }
+        '410': { description: expired / revoked }
+  /v1/shares/{id}:
+    delete:
+      summary: Revoke now (link dies, bytes deleted immediately, rows swept by purge)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{revoked: true}' }
+        '401': { description: password required / wrong }
+        '404': { description: unknown }
   /v1/blobs/{key}:
     get:
       summary: Stream bytes. HMAC ?expires&sig. Range supported. L1 real mode 302s to R2.
@@ -91,15 +116,19 @@ paths:
       responses:
         '200': { description: bytes }
         '206': { description: partial content }
+        '401': { description: password required / wrong }
         '403': { description: bad/expired signature }
-        '410': { description: blob purged }
+        '404': { description: unknown (burned/purged) }
+        '410': { description: blob purged / view limit reached }
         '416': { description: unsatisfiable range }
+        '429': { description: rate limited (120/min/IP) }
   /s/{id}:
     get:
-      summary: Short link → 302 to tier-appropriate signed URL
+      summary: Short link → 302 to tier-appropriate signed URL (consumes view for L1-real only)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
-        '302': { description: redirect }
+        '302': { description: redirect (L1-real TTL 5 min, else 15 min) }
+        '401': { description: password required / wrong }
         '404': { description: unknown }
-        '410': { description: expired }
+        '410': { description: expired / revoked / view limit reached }

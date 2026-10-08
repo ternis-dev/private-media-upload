@@ -41,13 +41,16 @@ final class Drivers
     {
         return match ($tier) {
             'L1' => R2S3Driver::fromEnv(),
-            'L2' => new SftpVaultDriver(
-                getenv('SFTP_L2_EMU_ROOT') ?: sys_get_temp_dir() . '/pwf-l2-emu',
-                self::appUrl(), self::hmacSecret()),
+            'L2' => SftpVaultDriver::fromEnv(),
             'L3' => new LocalSovereignDriver(
                 getenv('SOVEREIGN_PATH') ?: sys_get_temp_dir() . '/pwf-sovereign',
                 self::appUrl(), self::hmacSecret()),
             default => throw new \InvalidArgumentException('unknown tier'),
         };
+    }
+
+    public static function auditSalt(): string
+    {
+        return getenv('AUDIT_SALT') ?: self::hmacSecret();
     }
 }

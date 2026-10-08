@@ -79,6 +79,29 @@ final class StorageDriverContractTest extends TestCase
 
     /** @dataProvider drivers */
     #[\PHPUnit\Framework\Attributes\DataProvider('drivers')]
+    public function test_readrange_slices(StorageDriverInterface $d): void
+    {
+        $key = 'u/test/' . bin2hex(random_bytes(6)) . '.bin';
+        $d->put($key, 'abcdefghijklmnopqrstuvwxyz');
+        try {
+            $this->assertSame('abcde', $d->readRange($key, 0, 5));
+            $this->assertSame('klmno', $d->readRange($key, 10, 5));
+            $this->assertSame('xyz', $d->readRange($key, 23, 100)); // clamped at EOF
+        } finally {
+            $d->delete($key);
+        }
+    }
+
+    /** @dataProvider drivers */
+    #[\PHPUnit\Framework\Attributes\DataProvider('drivers')]
+    public function test_readrange_missing_throws(StorageDriverInterface $d): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $d->readRange('u/missing/' . bin2hex(random_bytes(6)), 0, 10);
+    }
+
+    /** @dataProvider drivers */
+    #[\PHPUnit\Framework\Attributes\DataProvider('drivers')]
     public function test_size_missing_throws(StorageDriverInterface $d): void
     {
         $this->expectException(\RuntimeException::class);

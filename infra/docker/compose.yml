@@ -35,11 +35,20 @@ services:
     image: axllent/mailpit:latest
     ports: ["8025:8025", "1025:1025"]
 
-  api: # M0 lean PHP router (Laravel lands M1 per ADR-0001)
+  api: # M2a lean PHP router (Laravel lands M2b per ADR-0001)
     build:
       context: ../..
       dockerfile: infra/docker/php.Dockerfile
     volumes: ["../../apps/api:/app"]
+    environment:
+      APP_URL: http://localhost:8000
+      WEB_URL: http://localhost:3000
+      HMAC_SECRET: ${HMAC_SECRET:-changeme-sovereign}
+      CLAMAV_HOST: clamav
+      SFTP_L2_HOST: sftp
+      SFTP_L2_USER: vault
+      SFTP_L2_PASSWORD: changeme
+      SFTP_L2_ROOT: /home/vault/vault
     ports: ["8000:8000"]
     depends_on: [pgsql, redis]
 

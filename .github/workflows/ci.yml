@@ -25,6 +25,12 @@ jobs:
           done
           TEST_MINIO_ENDPOINT=http://localhost:9000 vendor/bin/phpunit --colors=never --filter R2Minio
         working-directory: packages/storage-drivers
+      - name: Live SFTP roundtrip (Hetzner-box stand-in)
+        run: |
+          docker run -d --name sftp -p 2222:22 atmoz/sftp vault:secret:1001:100:vault
+          sleep 5
+          TEST_SFTP_HOST=localhost TEST_SFTP_PORT=2222 TEST_SFTP_USER=vault TEST_SFTP_PASS=secret TEST_SFTP_ROOT=/home/vault/vault vendor/bin/phpunit --colors=never --filter SftpLive
+        working-directory: packages/storage-drivers
 
   api:
     runs-on: ubuntu-latest
@@ -36,7 +42,7 @@ jobs:
         working-directory: apps/api
       - run: vendor/bin/phpunit --colors=never
         working-directory: apps/api
-      - run: for f in public/index.php bin/purge.php src/Shares.php src/Store.php src/UploadService.php src/Drivers.php src/HttpRange.php; do php -l $f; done
+      - run: for f in public/index.php bin/purge.php src/Shares.php src/Store.php src/UploadService.php src/Drivers.php src/HttpRange.php src/ClamAv.php; do php -l $f; done
         working-directory: apps/api
 
   web:

@@ -17,7 +17,37 @@ final class UploadService
     public function __construct(
         private Store $store,
         private string $webBaseUrl,
+        private mixed $scanner = null,
     ) {
+    }
+
+    /**
+     * Normalize share options. Returns [passwordHash|null, maxViews|null, burnInt].
+     *
+     * @throws \InvalidArgumentException
+     */
+    public static function validateShareOptions(array $opts): array
+    {
+        $password = $opts['password'] ?? null;
+        $hash = null;
+        if ($password !== null && $password !== '') {
+            if (!is_string($password) || strlen($password) < 8 || strlen($password) > 256) {
+                throw new \InvalidArgumentException('password must be 8..256 chars');
+            }
+            $hash = password_hash($password, PASSWORD_ARGON2ID);
+        }
+        $maxViews = $opts['maxViews'] ?? null;
+        if ($maxViews !== null) {
+            $maxViews = (int) $maxViews;
+            if ($maxViews < 1 || $maxViews > 100000) {
+                throw new \InvalidArgumentException('maxViews must be 1..100000');
+            }
+        }
+        $burn = !empty($opts['burn']) ? 1 : 0;
+        if ($burn === 1) {
+            $maxViews = 1; // burn-after-read ≡ single view
+        }
+        return [$hash, $maxViews, $burn];
     }
 
     /** @return array{uploadId: string, key: string, tier: string, expected: int} */
@@ -57,13 +87,14 @@ final class UploadService
     }
 
     /**
-     * Finalize a staged upload: verify size, sniff mime, sha256, single
+     * Finalize a staged upload: verify size, sniff mime, scan, single
      * streaming putFile into $driver, mint asset+share.
      *
      * @return array{shareId: string, shareUrl: string, tier: string, size: int, sha256: string, mime: string, expiresAt: string}
      */
-    public function complete(string $uploadId, StorageDriverInterface $driver): array
+    public function complete(string $uploadId, StorageDriverInterface $driver, array $opts = []): array
     {
+        [$passwordHash, $maxViews, $burn] = self::validateShareOptions($opts);
         $up = $this->store->getUpload($uploadId);
         if ($up === null || $up['status'] !== 'open') {
             throw new \RuntimeException('unknown or closed upload');
@@ -74,18 +105,25 @@ final class UploadService
             throw new \RuntimeException(
                 "incomplete upload: received {$up['received']}/{$up['expected']} bytes, staging {$actual}");
         }
+        $this->scan($staging);
         $sha = hash_file('sha256', $staging);
         $mime = $this->resolveMime($staging, $up['mime']);
         $driver->putFile($up['storage_key'], $staging);
-        return $this->mintShare($up['tier'], $up['storage_key'], $actual, $sha, $mime, $up['filename']);
+        $this->store->markComplete($uploadId);
+        unlink($staging);
+        return $this->mintShare($up['tier'], $up['storage_key'], $actual, $sha, $mime, $up['filename'],
+            $passwordHash, $maxViews, $burn);
     }
 
     /**
      * Finalize a browser-direct-to-R2 upload: bytes already in R2,
      * server verifies existence + size before minting the share.
+     * NOTE: inline malware scan covers the staged path only; direct uploads
+     * are scanned by the async worker (M2b). See docs/threat-model.md.
      */
-    public function completeL1(string $key, string $filename, int $size, string $mime, R2S3Driver $driver): array
+    public function completeL1(string $key, string $filename, int $size, string $mime, R2S3Driver $driver, array $opts = []): array
     {
+        [$passwordHash, $maxViews, $burn] = self::validateShareOptions($opts);
         [$ok, $err] = Shares::validateInit(['tier' => 'L1', 'filename' => $filename, 'size' => $size, 'mime' => $mime]);
         if (!$ok) {
             throw new \InvalidArgumentException($err);
@@ -98,10 +136,73 @@ final class UploadService
             throw new \RuntimeException("size mismatch: declared {$size}, stored {$actual}");
         }
         $sha = hash('sha256', $driver->get($key));
-        return $this->mintShare('L1', $key, $actual, $sha, $mime, $filename);
+        return $this->mintShare('L1', $key, $actual, $sha, $mime, $filename, $passwordHash, $maxViews, $burn);
     }
 
-    /** @return null|array{id,mime,filename,size,tier,badge,residency,expiresAt,expired} */
+    /**
+     * Gate a share row: ok | not-found | revoked | expired |
+     * password-required | password-wrong. Views are consumed separately
+     * (tryConsumeView) so redirects can check without counting.
+     */
+    public static function authorize(?array $shareRow, ?string $password): string
+    {
+        if ($shareRow === null) {
+            return 'not-found';
+        }
+        if ($shareRow['revoked_at'] !== null) {
+            return 'revoked';
+        }
+        if ((int) $shareRow['expires_at'] <= time()) {
+            return 'expired';
+        }
+        if ($shareRow['password_hash'] !== null) {
+            if ($password === null || $password === '') {
+                return 'password-required';
+            }
+            if (!password_verify($password, $shareRow['password_hash'])) {
+                return 'password-wrong';
+            }
+        }
+        if ($shareRow['max_views'] !== null && (int) $shareRow['views'] >= (int) $shareRow['max_views']) {
+            return 'exhausted';
+        }
+        return 'ok';
+    }
+
+    /** Delete blob via tier driver + drop metadata rows (burn / revoke / purge). */
+    public function deleteShareBlob(string $shareId, callable $driverFor): bool
+    {
+        $row = $this->store->getShare($shareId);
+        if ($row === null) {
+            return false;
+        }
+        try {
+            $driverFor($row['tier'])->delete($row['storage_key']);
+        } catch (\Throwable) {
+            // Blob already gone — still drop metadata.
+        }
+        $this->store->deleteShareTree($shareId);
+        return true;
+    }
+
+    /** Capability-based GDPR manifest (share id + password when set). */
+    public function export(string $shareId, ?string $password): ?array
+    {
+        $row = $this->store->getShare($shareId);
+        if (self::authorize($row, $password) !== 'ok') {
+            return null;
+        }
+        $meta = $this->meta($shareId);
+        return [
+            'share' => $meta,
+            'asset' => ['size' => $row['size'], 'sha256' => $row['sha256'], 'mime' => $row['mime'],
+                'filename' => $row['filename'], 'createdAt' => gmdate('c', (int) $row['created_at'])],
+            'accessLog' => $this->store->accessLogFor($shareId),
+            'retention' => 'expired/revoked shares are purged nightly (bytes <24h, rows with them)',
+        ];
+    }
+
+    /** @return null|array{id,tier,badge,residency,filename,mime,size,sha256,expiresAt,expired,revoked,hasPassword,views,maxViews,burn} */
     public function meta(string $shareId): ?array
     {
         if (!Shares::validId($shareId)) {
@@ -122,6 +223,11 @@ final class UploadService
             'sha256' => $row['sha256'],
             'expiresAt' => gmdate('c', (int) $row['expires_at']),
             'expired' => (int) $row['expires_at'] <= time(),
+            'revoked' => $row['revoked_at'] !== null,
+            'hasPassword' => $row['password_hash'] !== null,
+            'views' => (int) $row['views'],
+            'maxViews' => $row['max_views'] === null ? null : (int) $row['max_views'],
+            'burn' => (int) $row['burn'] === 1,
         ];
     }
 
@@ -130,19 +236,15 @@ final class UploadService
     {
         $n = 0;
         foreach ($this->store->expiredShares(time()) as $row) {
-            try {
-                $driverFor($row['tier'])->delete($row['storage_key']);
-            } catch (\Throwable) {
-                // Blob already gone — still drop metadata (M2: alert).
+            if ($this->deleteShareBlob($row['id'], $driverFor)) {
+                $n++;
             }
-            $this->store->deleteShareTree($row['id']);
-            $n++;
         }
         return $n;
     }
 
     /** @return array{shareId,shareUrl,tier,size,sha256,mime,expiresAt} */
-    private function mintShare(string $tier, string $storageKey, int $size, string $sha, string $mime, string $filename): array
+    private function mintShare(string $tier, string $storageKey, int $size, string $sha, string $mime, string $filename, ?string $passwordHash = null, ?int $maxViews = null, int $burn = 0): array
     {
         $now = time();
         $assetId = 'as_' . Shares::newId(16);
@@ -154,6 +256,7 @@ final class UploadService
         $expires = Shares::defaultExpiryUnix($tier);
         $this->store->createShare([
             'id' => $shareId, 'asset_id' => $assetId, 'tier' => $tier, 'expires_at' => $expires, 'now' => $now,
+            'password_hash' => $passwordHash, 'max_views' => $maxViews, 'burn' => $burn,
         ]);
         return [
             'shareId' => $shareId,
@@ -161,6 +264,19 @@ final class UploadService
             'tier' => $tier, 'size' => $size, 'sha256' => $sha, 'mime' => $mime,
             'expiresAt' => gmdate('c', $expires),
         ];
+    }
+
+    /** Inline malware scan (skipped when no scanner configured). */
+    private function scan(string $stagingPath): void
+    {
+        if ($this->scanner === null) {
+            return;
+        }
+        $virus = ($this->scanner)($stagingPath);
+        if ($virus !== null) {
+            unlink($stagingPath);
+            throw new \RuntimeException('rejected: malware detected (' . $virus . ')');
+        }
     }
 
     private function resolveMime(string $path, string $declared): string

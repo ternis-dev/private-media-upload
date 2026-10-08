@@ -8,6 +8,8 @@ const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 export default function Home() {
   const [tier, setTier] = useState<TierId>('L2');
   const [file, setFile] = useState<File | null>(null);
+  const [password, setPassword] = useState('');
+  const [burn, setBurn] = useState(false);
   const [progress, setProgress] = useState('');
   const [share, setShare] = useState('');
 
@@ -27,7 +29,10 @@ export default function Home() {
         setProgress(`uploading… ${((offset / file.size) * 100).toFixed(0)}% (${init.tier})`);
       }
       setProgress('finalizing…');
-      const done = await completeUpload(API, init.uploadId);
+      const done = await completeUpload(API, init.uploadId, {
+        password: password || undefined,
+        burn: burn || undefined,
+      });
       setShare(done.shareUrl);
       setProgress('done ✓');
     } catch (e) {
@@ -46,6 +51,17 @@ export default function Home() {
         </label>
       ))}
       <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <div style={{ marginTop: 8 }}>
+        <label>
+          Password (optional, min 8 chars):{' '}
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </label>
+      </div>
+      <div>
+        <label>
+          <input type="checkbox" checked={burn} onChange={(e) => setBurn(e.target.checked)} /> burn after first read
+        </label>
+      </div>
       <div style={{ marginTop: 12 }}>
         <button onClick={upload} style={{ padding: '10px 18px', fontSize: 16 }}>
           Upload{file ? ` ${file.name} (${(file.size / 1048576).toFixed(1)} MB)` : ''} via {tier}

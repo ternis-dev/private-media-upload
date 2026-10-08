@@ -63,8 +63,26 @@ export async function appendChunk(apiBase: string, uploadId: string, chunk: Blob
   return res.json();
 }
 
-export async function completeUpload(apiBase: string, uploadId: string): Promise<{ shareId: string; shareUrl: string }> {
-  const res = await fetch(`${apiBase}/v1/uploads/${uploadId}/complete`, { method: 'POST' });
+export interface CompleteOptions {
+  password?: string;
+  maxViews?: number;
+  burn?: boolean;
+}
+
+export async function completeUpload(
+  apiBase: string,
+  uploadId: string,
+  opts: CompleteOptions = {},
+): Promise<{ shareId: string; shareUrl: string }> {
+  const body: Record<string, unknown> = {};
+  if (opts.password) body.password = opts.password;
+  if (opts.maxViews) body.maxViews = opts.maxViews;
+  if (opts.burn) body.burn = true;
+  const res = await fetch(`${apiBase}/v1/uploads/${uploadId}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) await mustJson(res);
   return res.json();
 }

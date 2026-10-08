@@ -2,14 +2,16 @@
 
 declare(strict_types=1);
 
-// M1 lean router (no framework). Laravel migration in M2+ per ADR-0001.
+// M2a lean router (no framework). Laravel migration in M2b per ADR-0001.
 // Run: php -S localhost:8000 -t apps/api/public  (or composer serve in apps/api)
-// Endpoints: /health, /v1/tiers, /v1/uploads/init, PUT|POST /v1/uploads/{id},
-//   POST /v1/uploads/{id}/complete, POST /v1/uploads/l1-complete,
-//   GET /v1/shares/{id}/meta, GET /v1/blobs/..., GET /s/{id} (302).
+// Security model: unguessable share ids + rate limits + optional argon2id
+// password + max-views/burn + HMAC blob URLs + PII-minimized audit log.
+// Views are consumed at blob serve time — EXCEPT L1-real, where the bytes
+// never touch PHP, so /s/:id consumes at redirect instead.
 
 require __DIR__ . '/../vendor/autoload.php';
 
+use PrivateWf\Api\ClamAv;
 use PrivateWf\Api\Drivers;
 use PrivateWf\Api\HttpRange;
 use PrivateWf\Api\Shares;
@@ -29,10 +31,70 @@ $json = static function (mixed $data, int $code = 200): void {
 };
 
 $store = Store::open(Drivers::dbPath(), Drivers::varDir());
-$svc = new UploadService($store, Drivers::webUrl());
+$clam = ClamAv::fromEnv();
+$svc = new UploadService($store, Drivers::webUrl(),
+    $clam->enabled() ? $clam->scanFile(...) : null);
+
+$ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+$ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+$hashId = static fn (string $v): string => hash_hmac('sha256', $v, Drivers::auditSalt());
+
+/** Fixed-window gate. Returns true when allowed. */
+$gate = static function (string $name, int $limit, int $window) use ($store, $ip, $json): bool {
+    $r = $store->rateHit("{$name}:{$ip}", $limit, $window, time());
+    header('X-RateLimit-Remaining: ' . $r['remaining']);
+    if (!$r['allowed']) {
+        header('Retry-After: ' . max(1, $r['reset'] - time()));
+        $json(['error' => 'rate limited', 'retryAfter' => $r['reset']], 429);
+        return false;
+    }
+    return true;
+};
+
+/** Share password from header (preferred) or query (leaks into logs — header first). */
+$sharePassword = static function (): ?string {
+    $h = $_SERVER['HTTP_X_SHARE_PASSWORD'] ?? null;
+    if ($h !== null && $h !== '') {
+        return $h;
+    }
+    $q = $_GET['password'] ?? null;
+    return $q !== null && $q !== '' ? (string) $q : null;
+};
+
+$audit = static function (?string $shareId, string $result) use ($store, $ip, $ua, $hashId): void {
+    if ($shareId !== null) {
+        $store->logAccess($shareId, $hashId($ip), $hashId($ua), $result, time());
+    }
+};
+
+/** Map authorize() status → HTTP. Returns row on ok, else responds + null. */
+$authorizeHttp = static function (?array $row, ?string $shareId) use ($json, $audit, $sharePassword): ?array {
+    if ($row === null) {
+        $json(['error' => 'unknown share'], 404);
+        return null;
+    }
+    $st = UploadService::authorize($row, $sharePassword());
+    if ($st === 'ok') {
+        return $row;
+    }
+    $audit($shareId, match ($st) {
+        'password-required', 'password-wrong' => 'bad-password',
+        default => $st,
+    });
+    match ($st) {
+        'not-found' => $json(['error' => 'unknown share'], 404),
+        'revoked' => $json(['error' => 'share revoked'], 410),
+        'expired' => $json(['error' => 'share expired'], 410),
+        'exhausted' => $json(['error' => 'view limit reached'], 410),
+        'password-required' => $json(['error' => 'password required', 'passwordRequired' => true], 401),
+        default => $json(['error' => 'wrong password'], 401),
+    };
+    return null;
+};
 
 if ($method === 'GET' && $path === '/health') {
-    $json(['ok' => true, 'service' => 'private-wf-api', 'm' => 'M1']);
+    $json(['ok' => true, 'service' => 'private-wf-api', 'm' => 'M2a',
+        'scanner' => $clam->enabled() ? 'clamav' : 'skipped']);
     return;
 }
 
@@ -47,6 +109,9 @@ if ($method === 'GET' && $path === '/v1/tiers') {
 
 // Reserve an upload. L1 real mode also returns a SigV4 presigned PUT for browser-direct.
 if ($method === 'POST' && $path === '/v1/uploads/init') {
+    if (!$gate('init', 30, 3600)) {
+        return;
+    }
     $body = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
     try {
         $r = $svc->reserve(
@@ -81,6 +146,9 @@ if ($method === 'POST' && $path === '/v1/uploads/init') {
 
 // Append raw bytes to a staged upload (repeatable; 4–10 MB chunks recommended).
 if (($method === 'PUT' || $method === 'POST') && preg_match('#^/v1/uploads/(up_[0-9A-Za-z]{8,32})$#', $path, $m)) {
+    if (!$gate('append', 600, 3600)) {
+        return;
+    }
     try {
         $r = $svc->append($m[1], file_get_contents('php://input') ?: '');
         $json(['received' => $r['received'], 'expected' => $r['expected'], 'done' => $r['received'] === $r['expected']]);
@@ -91,15 +159,25 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/v1/uploads/(up_[
     return;
 }
 
-// Finalize a staged upload (single streaming putFile into the tier driver).
+// Finalize a staged upload (verify + scan + streaming putFile + mint share).
 if ($method === 'POST' && preg_match('#^/v1/uploads/(up_[0-9A-Za-z]{8,32})/complete$#', $path, $m)) {
+    if (!$gate('complete', 60, 3600)) {
+        return;
+    }
     $up = $store->getUpload($m[1]);
     if ($up === null) {
         $json(['error' => 'unknown upload'], 404);
         return;
     }
+    $body = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
     try {
-        $json($svc->complete($m[1], Drivers::forTier($up['tier'])), 201);
+        $json($svc->complete($m[1], Drivers::forTier($up['tier']), [
+            'password' => $body['password'] ?? null,
+            'maxViews' => $body['maxViews'] ?? null,
+            'burn' => $body['burn'] ?? false,
+        ]), 201);
+    } catch (\InvalidArgumentException $e) {
+        $json(['error' => $e->getMessage()], 422);
     } catch (\RuntimeException $e) {
         $json(['error' => $e->getMessage()], 422);
     }
@@ -108,6 +186,9 @@ if ($method === 'POST' && preg_match('#^/v1/uploads/(up_[0-9A-Za-z]{8,32})/compl
 
 // Finalize a browser-direct-to-R2 upload (bytes already in R2; server verifies).
 if ($method === 'POST' && $path === '/v1/uploads/l1-complete') {
+    if (!$gate('complete', 60, 3600)) {
+        return;
+    }
     $body = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
     $key = (string) ($body['key'] ?? '');
     if (!str_starts_with($key, 'u/l1/') || str_contains($key, '..')) {
@@ -118,7 +199,11 @@ if ($method === 'POST' && $path === '/v1/uploads/l1-complete') {
     assert($r2 instanceof R2S3Driver);
     try {
         $json($svc->completeL1($key, (string) ($body['filename'] ?? ''), (int) ($body['size'] ?? 0),
-            (string) ($body['mime'] ?? 'application/octet-stream'), $r2), 201);
+            (string) ($body['mime'] ?? 'application/octet-stream'), $r2, [
+                'password' => $body['password'] ?? null,
+                'maxViews' => $body['maxViews'] ?? null,
+                'burn' => $body['burn'] ?? false,
+            ]), 201);
     } catch (\InvalidArgumentException $e) {
         $json(['error' => $e->getMessage()], 422);
     } catch (\RuntimeException $e) {
@@ -128,21 +213,69 @@ if ($method === 'POST' && $path === '/v1/uploads/l1-complete') {
 }
 
 if ($method === 'GET' && preg_match('#^/v1/shares/([0-9A-Za-z]{8,32})/meta$#', $path, $m)) {
-    $meta = $svc->meta($m[1]);
-    if ($meta === null) {
-        $json(['error' => 'unknown share'], 404);
+    if (!$gate('guess', 60, 60)) {
         return;
     }
-    if ($meta['expired']) {
-        $json(['error' => 'share expired', 'id' => $meta['id']], 410);
+    $row = $authorizeHttp($store->getShare($m[1]), $m[1]);
+    if ($row === null) {
         return;
     }
-    $json($meta);
+    $audit($m[1], 'meta-ok');
+    $json($svc->meta($m[1]));
     return;
 }
 
-// Stream bytes (L2/L3 + L1 emulation) with HMAC + Range. L1 real mode redirects to R2.
+// Capability-based GDPR manifest (id + password when set).
+if ($method === 'GET' && preg_match('#^/v1/shares/([0-9A-Za-z]{8,32})/export$#', $path, $m)) {
+    if (!$gate('export', 60, 3600)) {
+        return;
+    }
+    $row = $authorizeHttp($store->getShare($m[1]), $m[1]);
+    if ($row === null) {
+        return;
+    }
+    $audit($m[1], 'export-ok');
+    $json($svc->export($m[1], $sharePassword()));
+    return;
+}
+
+// Revoke now: link dies (410), bytes deleted immediately, rows swept by purge.
+if ($method === 'DELETE' && preg_match('#^/v1/shares/([0-9A-Za-z]{8,32})$#', $path, $m)) {
+    if (!$gate('export', 60, 3600)) {
+        return;
+    }
+    $row = $store->getShare($m[1]);
+    if ($row === null) {
+        $json(['error' => 'unknown share'], 404);
+        return;
+    }
+    // Destructive: password required when set (unless already dead).
+    $st = UploadService::authorize($row, $sharePassword());
+    if ($st === 'password-required') {
+        $json(['error' => 'password required', 'passwordRequired' => true], 401);
+        return;
+    }
+    if ($st === 'password-wrong') {
+        $audit($m[1], 'bad-password');
+        $json(['error' => 'wrong password'], 401);
+        return;
+    }
+    $driverFor = static fn (string $tier) => Drivers::forTier($tier);
+    $store->revokeShare($m[1], time());
+    try {
+        $driverFor($row['tier'])->delete($row['storage_key']);
+    } catch (\Throwable) {
+    }
+    $audit($m[1], 'revoked');
+    $json(['revoked' => true]);
+    return;
+}
+
+// Stream bytes with HMAC + password + view accounting. L1-real 302s to R2.
 if ($method === 'GET' && str_starts_with($path, '/v1/blobs/')) {
+    if (!$gate('blob', 120, 60)) {
+        return;
+    }
     $key = implode('/', array_map('rawurldecode', explode('/', substr($path, strlen('/v1/blobs/')))));
     if (!preg_match('#^u/(l1|l2|l3)/#', $key, $tm) || str_contains($key, '..')) {
         $json(['error' => 'invalid key'], 400);
@@ -150,75 +283,105 @@ if ($method === 'GET' && str_starts_with($path, '/v1/blobs/')) {
     }
     $tier = strtoupper($tm[1]);
     $driver = Drivers::forTier($tier);
+    if ($tier === 'L1' && $driver instanceof R2S3Driver && $driver->isReal()) {
+        // L1-real bytes live in object storage, never in PHP: use /s/:id.
+        $json(['error' => 'L1 bytes are served by object storage; use the short link'], 404);
+        return;
+    }
     $expires = (int) ($_GET['expires'] ?? 0);
     $sig = (string) ($_GET['sig'] ?? '');
     if (!$driver->verifySignedUrl($key, $expires, $sig)) {
         $json(['error' => 'bad or expired signature'], 403);
         return;
     }
+    $shareRow = $store->getShareByKey($key);
+    $shareId = $shareRow['id'] ?? null;
+    $row = $authorizeHttp($shareRow, $shareId);
+    if ($row === null) {
+        return;
+    }
     if ($tier === 'L1' && $driver instanceof R2S3Driver && $driver->isReal()) {
         header('Location: ' . $driver->signedGetUrl($key, 300), true, 302);
         return;
     }
-    /** @var \PrivateWf\Storage\LocalSovereignDriver|\PrivateWf\Storage\SftpVaultDriver|\PrivateWf\Storage\R2S3Driver $driver */
-    $fsPath = $driver->localPath($key);
-    if (!is_file($fsPath)) {
+    $consume = $store->tryConsumeView($shareId);
+    if (!$consume['ok']) {
+        $audit($shareId, $consume['reason']);
+        $json(['error' => $consume['reason'] === 'exhausted' ? 'view limit reached' : 'share ' . $consume['reason']],
+            $consume['reason'] === 'not-found' ? 404 : 410);
+        return;
+    }
+    try {
+        $size = $driver->size($key);
+    } catch (\RuntimeException) {
+        $audit($shareId, 'blob-gone');
         $json(['error' => 'blob gone (expired/purged?)'], 410);
         return;
     }
-    $size = filesize($fsPath);
-    $asset = $store->getAssetByKey($key);
-    $mime = $asset !== null ? $asset['mime'] : 'application/octet-stream';
+    $mime = $shareRow['mime'] ?? 'application/octet-stream';
     header('Content-Type: ' . $mime);
     header('Content-Disposition: attachment');
     header('Accept-Ranges: bytes');
     $rangeHeader = $_SERVER['HTTP_RANGE'] ?? '';
+    $start = 0;
+    $end = $size - 1;
     if ($rangeHeader !== '') {
         $range = HttpRange::parse($rangeHeader, $size);
         if ($range === null) {
+            $audit($shareId, 'bad-range');
             http_response_code(416);
             header("Content-Range: bytes */{$size}");
             return;
         }
+        $start = $range['start'];
+        $end = $range['end'];
         http_response_code(206);
-        $len = $range['end'] - $range['start'] + 1;
-        header("Content-Range: bytes {$range['start']}-{$range['end']}/{$size}");
-        header("Content-Length: {$len}");
-        $fh = fopen($fsPath, 'rb');
-        fseek($fh, $range['start']);
-        $left = $len;
-        while ($left > 0 && !feof($fh)) {
-            echo fread($fh, (int) min(8192, $left));
-            $left -= 8192;
-            if ($left % 1048576 < 8192) {
-                flush();
-            }
-        }
-        fclose($fh);
-        return;
+        header("Content-Range: bytes {$start}-{$end}/{$size}");
     }
-    header("Content-Length: {$size}");
-    $fh = fopen($fsPath, 'rb');
-    while (!feof($fh)) {
-        echo fread($fh, 8192);
+    header('Content-Length: ' . ($end - $start + 1));
+    $chunk = 1048576;
+    for ($off = $start; $off <= $end; $off += $chunk) {
+        echo $driver->readRange($key, $off, (int) min($chunk, $end - $off + 1));
+        flush();
     }
-    fclose($fh);
+    $audit($shareId, 'blob-ok');
+    if ($consume['spent']) {
+        // Burn / last view: bytes + rows die with this read.
+        $svc->deleteShareBlob($shareId, static fn (string $t) => Drivers::forTier($t));
+    }
     return;
 }
 
 // Short link: 302 to the tier-appropriate signed URL.
 if ($method === 'GET' && preg_match('#^/s/([0-9A-Za-z]{8,32})$#', $path, $m)) {
-    $meta = $svc->meta($m[1]);
-    if ($meta === null) {
-        $json(['error' => 'unknown share'], 404);
+    if (!$gate('guess', 60, 60)) {
         return;
     }
-    if ($meta['expired']) {
-        $json(['error' => 'share expired'], 410);
+    $row = $authorizeHttp($store->getShare($m[1]), $m[1]);
+    if ($row === null) {
         return;
     }
-    $row = $store->getShare($m[1]);
-    header('Location: ' . Drivers::forTier($meta['tier'])->signedGetUrl($row['storage_key'], 900), true, 302);
+    $driver = Drivers::forTier($row['tier']);
+    $isL1Real = $row['tier'] === 'L1' && $driver instanceof R2S3Driver && $driver->isReal();
+    if ($isL1Real) {
+        // Bytes never touch PHP here — consume the view at redirect time.
+        // Residual risk (documented): the issued SigV4 URL stays valid for its
+        // short TTL, so L2/L3 proxy is recommended for strict burn semantics.
+        $consume = $store->tryConsumeView($m[1]);
+        if (!$consume['ok']) {
+            $audit($m[1], $consume['reason']);
+            $json(['error' => 'view limit reached'], 410);
+            return;
+        }
+        if ($consume['spent']) {
+            // Single-use L1-real link: revoke after issuing (blob stays till purge).
+            $store->revokeShare($m[1], time());
+        }
+    }
+    $audit($m[1], 'redirect-ok');
+    // Short TTL for L1-real (presigned URLs can't be un-issued): 5 min.
+    $ttl = $isL1Real ? 300 : 900;
+    header('Location: ' . $driver->signedGetUrl($row['storage_key'], $ttl), true, 302);
     return;
 }
 
