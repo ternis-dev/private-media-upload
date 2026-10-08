@@ -1,12 +1,11 @@
 'use client';
 import { use, useCallback, useEffect, useState } from 'react';
 import { decryptContainer, parseShareKey } from '../../../lib/e2ee';
+import { apiFetch } from '../../../lib/api';
 import { formatBytes, formatDate, daysLeft } from '../../../lib/format';
 import { FileIcon } from '../../../components/icons';
 import { Alert, CopyField, btnPrimary, inputCls } from '../../../components/ui';
 import { ReportForm } from '../../../components/ReportForm';
-
-const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 
 interface Meta {
   id: string;
@@ -38,7 +37,7 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
   const load = useCallback(
     async (pw?: string) => {
       setError('');
-      const res = await fetch(`${API}/v1/shares/${id}/meta`, {
+      const res = await apiFetch(`/api/v1/shares/${id}/meta`, {
         headers: pw ? { 'X-Share-Password': pw } : {},
       });
       if (res.status === 401) {
@@ -58,7 +57,7 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
       const m = (await res.json()) as Meta;
       setMeta(m);
       if (m.hasThumbnail && !m.e2ee) {
-        const tr = await fetch(`${API}/s/${m.id}?thumb=1`, {
+        const tr = await apiFetch(`/api/s/${m.id}?thumb=1`, {
           headers: pw ? { 'X-Share-Password': pw } : {},
         });
         if (tr.ok) setThumbUrl(URL.createObjectURL(await tr.blob()));
@@ -77,7 +76,7 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
     setDownloading(true);
     setError('');
     try {
-      const res = await fetch(`${API}/s/${meta.id}`, {
+      const res = await apiFetch(`/api/s/${meta.id}`, {
         headers: password ? { 'X-Share-Password': password } : {},
       });
       if (res.status === 401) {
@@ -226,7 +225,7 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
             </div>
 
             <div className="border-t border-edge pt-2">
-              <ReportForm api={API} shareId={meta.id} />
+              <ReportForm shareId={meta.id} />
             </div>
           </div>
         </article>

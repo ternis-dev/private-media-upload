@@ -1,6 +1,7 @@
-// M1 client for the chunked upload flow:
+// M1 client for the chunked upload flow (same-origin via /api proxy):
 // init → PUT chunks (4 MB) → complete → shareUrl. No dependencies.
 import type { TierId } from './tiers';
+import { apiFetch, apiJson } from './api';
 
 export const CHUNK_BYTES = 4 * 1024 * 1024;
 
@@ -38,28 +39,24 @@ export function parseShareId(urlOrId: string): string | null {
   return m ? m[1] : null;
 }
 
-async function mustJson(res: Response): Promise<never> {
-  const text = await res.text();
-  throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
-}
-
-export async function initUpload(apiBase: string, input: InitInput): Promise<InitResponse> {
-  const res = await fetch(`${apiBase}/v1/uploads/init`, {
+export async function initUpload(input: InitInput): Promise<InitResponse> {
+  return apiJson<InitResponse>('/v1/uploads/init', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
-  if (!res.ok) await mustJson(res);
-  return res.json();
 }
 
-export async function appendChunk(apiBase: string, uploadId: string, chunk: Blob): Promise<Progress> {
-  const res = await fetch(`${apiBase}/v1/uploads/${uploadId}`, {
+export async function appendChunk(uploadId: string, chunk: Blob): Promise<Progress> {
+  const res = await apiFetch(`/v1/uploads/${uploadId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: chunk,
   });
-  if (!res.ok) await mustJson(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(typeof body.error === 'string' ? body.error : `Upload failed (${res.status}).`);
+  }
   return res.json();
 }
 
@@ -71,7 +68,6 @@ export interface CompleteOptions {
 }
 
 export async function completeUpload(
-  apiBase: string,
   uploadId: string,
   opts: CompleteOptions = {},
 ): Promise<{ shareId: string; shareUrl: string }> {
@@ -80,11 +76,9 @@ export async function completeUpload(
   if (opts.maxViews) body.maxViews = opts.maxViews;
   if (opts.burn) body.burn = true;
   if (opts.e2ee) body.e2ee = true;
-  const res = await fetch(`${apiBase}/v1/uploads/${uploadId}/complete`, {
+  return apiJson(`/v1/uploads/${uploadId}/complete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) await mustJson(res);
-  return res.json();
 }

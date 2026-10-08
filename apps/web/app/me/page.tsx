@@ -3,8 +3,7 @@ import { useState } from 'react';
 import { formatBytes, formatDate } from '../../lib/format';
 import { FileIcon } from '../../components/icons';
 import { Alert, CopyField, btnDanger, btnGhost, btnPrimary, inputCls } from '../../components/ui';
-
-const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
+import { apiFetch } from '../../lib/api';
 
 interface Asset {
   id: string;
@@ -34,7 +33,7 @@ export default function MePage() {
   }
 
   async function register() {
-    const r = await fetch(`${API}/v1/auth/register`, {
+    const r = await apiFetch(`/api/v1/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -43,7 +42,7 @@ export default function MePage() {
   }
 
   async function login() {
-    const r = await fetch(`${API}/v1/auth/login`, {
+    const r = await apiFetch(`/api/v1/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, name: 'web' }),
@@ -59,7 +58,7 @@ export default function MePage() {
   }
 
   async function refresh(t: string = token ?? '') {
-    const r = await fetch(`${API}/v1/me/assets`, { headers: { Authorization: `Bearer ${t}` } });
+    const r = await apiFetch(`/api/v1/me/assets`, { headers: { Authorization: `Bearer ${t}` } });
     if (!r.ok) {
       note('Session expired — log in again.', 'error');
       setToken(null);
@@ -72,7 +71,7 @@ export default function MePage() {
   }
 
   async function exportZip() {
-    const r = await fetch(`${API}/v1/me/export?format=zip`, { headers: auth });
+    const r = await apiFetch(`/api/v1/me/export?format=zip`, { headers: auth });
     if (!r.ok) {
       note(`Export failed (${r.status}).`, 'error');
       return;
@@ -89,7 +88,7 @@ export default function MePage() {
   async function deleteShare(a: Asset) {
     if (!a.share_id) return;
     if (!confirm(`Delete “${a.filename}” irreversibly?`)) return;
-    const r = await fetch(`${API}/v1/shares/${a.share_id}`, { method: 'DELETE', headers: auth });
+    const r = await apiFetch(`/api/v1/shares/${a.share_id}`, { method: 'DELETE', headers: auth });
     if (!r.ok) {
       note(`Delete failed (${r.status})${r.status === 401 ? ' — share may need its password' : ''}.`, 'error');
       return;
@@ -101,7 +100,7 @@ export default function MePage() {
   async function deleteAccount() {
     if (!confirm('Delete your account and ALL files irreversibly?')) return;
     if (!confirm('Really sure? There is no undo.')) return;
-    const r = await fetch(`${API}/v1/me`, {
+    const r = await apiFetch(`/api/v1/me`, {
       method: 'DELETE',
       headers: { ...auth, 'Content-Type': 'application/json' },
       body: JSON.stringify({ password }),

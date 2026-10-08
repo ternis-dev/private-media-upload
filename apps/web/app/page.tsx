@@ -8,8 +8,6 @@ import { TierPicker } from '../components/TierPicker';
 import { Dropzone } from '../components/Dropzone';
 import { Alert, CopyField, Field, ProgressBar, btnPrimary, inputCls } from '../components/ui';
 
-const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
-
 type Phase = 'idle' | 'encrypting' | 'reserving' | 'uploading' | 'finalizing' | 'done' | 'error';
 
 const PHASE_LABEL: Record<Phase, string> = {
@@ -56,16 +54,16 @@ export default function Home() {
         mime = 'application/octet-stream';
       }
       setPhase('reserving');
-      const init = await initUpload(API, { tier, filename: name, size: bytes.length, mime });
+      const init = await initUpload({ tier, filename: name, size: bytes.length, mime });
       setPhase('uploading');
       let offset = 0;
       while (offset < bytes.length) {
-        const p = await appendChunk(API, init.uploadId, new Blob([bytes.subarray(offset, offset + CHUNK_BYTES)]));
+        const p = await appendChunk(init.uploadId, new Blob([bytes.subarray(offset, offset + CHUNK_BYTES)]));
         offset = p.received;
         setPercent((offset / bytes.length) * 100);
       }
       setPhase('finalizing');
-      const done = await completeUpload(API, init.uploadId, {
+      const done = await completeUpload(init.uploadId, {
         password: password || undefined,
         burn: burn || undefined,
         e2ee: e2ee || undefined,

@@ -1,10 +1,11 @@
 'use client';
 import { useState } from 'react';
 import { btnGhost, btnPrimary, inputCls, Alert } from './ui';
+import { apiFetch } from '../lib/api';
 
 const REASONS = ['csam', 'terror', 'copyright', 'malware', 'other'] as const;
 
-export function ReportForm({ api, shareId }: { api: string; shareId: string }) {
+export function ReportForm({ shareId }: { shareId: string }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState<string>('other');
   const [contact, setContact] = useState('');
@@ -14,7 +15,7 @@ export function ReportForm({ api, shareId }: { api: string; shareId: string }) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
-    const res = await fetch(`${api}/v1/shares/${shareId}/report`, {
+    const res = await apiFetch(`/api/v1/shares/${shareId}/report`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason, contact: contact || undefined }),

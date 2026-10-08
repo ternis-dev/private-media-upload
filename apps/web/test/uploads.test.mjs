@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHUNK_BYTES, chunkCount, parseShareId, completeUpload } from '../lib/uploads.ts';
+import { CHUNK_BYTES, chunkCount, parseShareId, completeUpload, initUpload } from '../lib/uploads.ts';
 
 describe('uploads', () => {
   it('chunks in 4 MB units', () => {
@@ -26,12 +26,26 @@ describe('uploads', () => {
       return new Response(JSON.stringify({ shareId: 'x'.repeat(12), shareUrl: 'http://localhost:3000/s/' + 'x'.repeat(12) }), { status: 201 });
     };
     try {
-      await completeUpload('http://api', 'up_' + 'y'.repeat(16), { password: 'pw-12345678', burn: true });
+      await completeUpload('up_' + 'y'.repeat(16), { password: 'pw-12345678', burn: true });
     } finally {
       globalThis.fetch = orig;
     }
     assert.equal(seen.length, 1);
-    assert.match(seen[0][0], /\/v1\/uploads\/up_/);
+    assert.equal(seen[0][0], '/api/v1/uploads/up_yyyyyyyyyyyyyyyy/complete');
     assert.deepEqual(JSON.parse(seen[0][1].body), { password: 'pw-12345678', burn: true });
+  });
+  it('init posts to the same-origin proxy', async () => {
+    const seen = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      seen.push([url, init]);
+      return new Response(JSON.stringify({ uploadId: 'up_' + 'z'.repeat(16) }), { status: 201 });
+    };
+    try {
+      await initUpload({ tier: 'L2', filename: 'a.bin', size: 1, mime: 'application/octet-stream' });
+    } finally {
+      globalThis.fetch = orig;
+    }
+    assert.equal(seen[0][0], '/api/v1/uploads/init');
   });
 });

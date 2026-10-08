@@ -93,7 +93,8 @@ services:
       context: ../../apps/web
       dockerfile: Dockerfile
     environment:
-      NEXT_PUBLIC_API_BASE: ${APP_URL:-https://private.wf}
+      # Server-side only (client uses same-origin /api proxy — nothing baked at build).
+      API_BASE: ${APP_URL:-https://private.wf}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
