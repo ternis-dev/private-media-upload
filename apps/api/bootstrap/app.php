@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'pwf.bearer' => \App\Http\Middleware\OptionalBearer::class,
             'pwf.auth' => \App\Http\Middleware\RequireBearer::class,
         ]);
+        $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(fn (ApiError $e) => response()->json($e->payload, $e->getStatusCode(), $e->getHeaders()));

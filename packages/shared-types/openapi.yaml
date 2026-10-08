@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: private.wf API
-  version: 0.4.0-M3
-  description: M3 E2EE: AES-256-GCM PWF1 containers (key in #fragment, server blind). Complete opts gain e2ee flag; meta exposes e2ee; quarantine skips ciphertext.
+  version: 0.5.0-M4
+  description: M4 beta. Adds thumbnails (?thumb=1 previews), abuse reports, deep health, security headers. Same upload/share/auth/tus/E2EE contract as 0.4.0.
 servers:
   - url: http://localhost:8000
 paths:
@@ -160,6 +160,31 @@ paths:
         '200': { description: '{revoked: true}' }
         '401': { description: password required / wrong }
         '404': { description: unknown }
+  /v1/shares/{id}/report:
+    post:
+      summary: File an abuse report (unauthenticated, 10/h; review via pwf:reports)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [csam, terror, copyright, malware, other] }
+                contact: { type: string, format: email }
+      responses:
+        '201': { description: '{reportId}' }
+        '404': { description: unknown }
+        '422': { description: bad reason/contact }
+        '429': { description: rate limited }
+  /v1/health:
+    get:
+      summary: Deep health (always 200; ok:false when degraded). Probes db, tiers, clamav.
+      responses:
+        '200': { description: '{ok, checks: {db, storage: {L1, L2, L3}, clamav}}' }
   /v1/blobs/{key}:
     get:
       summary: Stream bytes. HMAC ?expires&sig. Range supported. L1 real mode 302s to R2.
@@ -176,11 +201,11 @@ paths:
         '429': { description: rate limited (120/min/IP) }
   /s/{id}:
     get:
-      summary: Short link → 302 to tier-appropriate signed URL (consumes view for L1-real only)
+      summary: Short link → 302 to tier-appropriate signed URL (consumes view for L1-real only). ?thumb=1 previews the thumbnail (gated, never consumes).
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '302': { description: redirect (L1-real TTL 5 min, else 15 min) }
         '401': { description: password required / wrong }
-        '404': { description: unknown }
+        '404': { description: unknown / no thumbnail }
         '410': { description: expired / revoked / view limit reached }

@@ -41,7 +41,11 @@ final class BlobController extends Controller
         $shareRow = $this->store->getShareByKey($key);
         $row = Api::need($this->store, $shareRow, $shareRow['id'] ?? null, $request);
         $shareId = $row['id'];
-        $consume = $this->store->tryConsumeView($shareId);
+        // Thumbnail reads are previews: same gates, correct JPEG type, no view consumed.
+        $isThumb = $shareRow['thumb_key'] !== null && $shareRow['thumb_key'] === $key;
+        $consume = $isThumb
+            ? ['ok' => true, 'spent' => false]
+            : $this->store->tryConsumeView($shareId);
         if (!$consume['ok']) {
             Api::audit($this->store, $shareId, $consume['reason'], $request);
             throw new ApiError($consume['reason'] === 'not-found' ? 404 : 410, ['error'
@@ -67,7 +71,7 @@ final class BlobController extends Controller
             $status = 206;
         }
         $headers = [
-            'Content-Type' => $shareRow['mime'] ?? 'application/octet-stream',
+            'Content-Type' => $isThumb ? 'image/jpeg' : ($shareRow['mime'] ?? 'application/octet-stream'),
             'Content-Disposition' => 'attachment',
             'Accept-Ranges' => 'bytes',
             'Content-Length' => (string) ($end - $start + 1),
@@ -87,7 +91,7 @@ final class BlobController extends Controller
                 $svc->deleteShareBlob($shareId, static fn (string $t) => Drivers::forTier($t));
             }
         }, $status, $headers);
-        Api::audit($this->store, $shareId, 'blob-ok', $request);
+        Api::audit($this->store, $shareId, $isThumb ? 'thumb-ok' : 'blob-ok', $request);
         return $response;
     }
 }

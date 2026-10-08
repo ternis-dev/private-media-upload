@@ -1,0 +1,26 @@
+name: release
+on:
+  push:
+    tags: ["api-v*", "web-v*"]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          push: true
+          tags: ghcr.io/ternis-dev/private-media-upload-api:${{ github.ref_name }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          file: apps/web/Dockerfile
+          push: true
+          tags: ghcr.io/ternis-dev/private-media-upload-web:${{ github.ref_name }}

@@ -13,6 +13,8 @@ use Illuminate\Support\Facades\Route;
 use PrivateWf\Api\Shares;
 use PrivateWf\Api\Store;
 
+Route::get('/v1/health', [\App\Http\Controllers\HealthController::class, 'deep']);
+
 // Contract identical to the lean router (openapi 0.4.0). No /api prefix,
 // no session/CSRF middleware — auth is Bearer, limits are per-route.
 Route::get('/health', fn (Store $store, \PrivateWf\Api\ClamAv $clam) => response()->json([
@@ -57,6 +59,8 @@ Route::get('/v1/shares/{id}/export', [ShareController::class, 'export'])
     ->where('id', '[0-9A-Za-z]{8,32}')->middleware('pwf.rate:export,60,3600');
 Route::delete('/v1/shares/{id}', [ShareController::class, 'destroy'])
     ->where('id', '[0-9A-Za-z]{8,32}')->middleware('pwf.rate:export,60,3600');
+Route::post('/v1/shares/{id}/report', [ShareController::class, 'report'])
+    ->where('id', '[0-9A-Za-z]{8,32}')->middleware('pwf.rate:report,10,3600');
 
 Route::get('/v1/blobs/{key}', [BlobController::class, 'show'])
     ->where('key', '.*')->middleware('pwf.rate:blob,120,60');

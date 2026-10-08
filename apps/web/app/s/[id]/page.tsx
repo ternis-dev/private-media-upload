@@ -18,6 +18,7 @@ interface Meta {
   maxViews: number | null;
   burn: boolean;
   e2ee: boolean;
+  hasThumbnail: boolean;
 }
 
 export default function SharePage({ params }: { params: Promise<{ id: string }> }) {
@@ -27,6 +28,7 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
   const [meta, setMeta] = useState<Meta | null>(null);
   const [error, setError] = useState('');
   const [downloading, setDownloading] = useState(false);
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
 
   const load = useCallback(
     async (pw?: string) => {
@@ -48,7 +50,15 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
         return;
       }
       setNeedPassword(false);
-      setMeta(await res.json());
+      const m = (await res.json()) as Meta;
+      setMeta(m);
+      // Thumbnail preview (password travels in header; preview never consumes a view).
+      if (m.hasThumbnail && !m.e2ee) {
+        const tr = await fetch(`${API}/s/${m.id}?thumb=1`, {
+          headers: pw ? { 'X-Share-Password': pw } : {},
+        });
+        if (tr.ok) setThumbUrl(URL.createObjectURL(await tr.blob()));
+      }
     },
     [id],
   );
@@ -123,6 +133,12 @@ export default function SharePage({ params }: { params: Promise<{ id: string }> 
           <p>
             <strong>{meta.filename}</strong> · {(meta.size / 1048576).toFixed(1)} MB · {meta.mime}
           </p>
+          {thumbUrl && (
+            <p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={thumbUrl} alt={`Preview of ${meta.filename}`} style={{ maxWidth: '100%', borderRadius: 8 }} />
+            </p>
+          )}
           <p>
             <strong>{meta.tier}</strong> <em>{meta.badge}</em> · residency {meta.residency}
             {meta.e2ee && ' · 🔒 end-to-end encrypted (only this browser can read it)'}

@@ -115,4 +115,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose -f infra/docker/compose.yml config
+      - run: docker compose -f infra/docker/compose.yml config -q
+      - run: DB_PASSWORD=dummy HMAC_SECRET=dummy APP_KEY=base64:dummy00000000000000000000000000000000000= docker compose -f infra/docker/compose.prod.yml config -q
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+        working-directory: infra/terraform
+      - run: terraform init -backend=false -input=false
+        working-directory: infra/terraform
+      - run: terraform validate
+        working-directory: infra/terraform
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f apps/api/Dockerfile apps/api
+      - run: docker build -f apps/web/Dockerfile apps/web

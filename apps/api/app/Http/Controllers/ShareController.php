@@ -55,4 +55,20 @@ final class ShareController extends Controller
         Api::audit($this->store, $id, 'revoked', $request);
         return response()->json(['revoked' => true]);
     }
+
+    /** Unauthenticated abuse report (rate-limited, audited). Review via pwf:reports. */
+    public function report(Request $request, string $id): JsonResponse
+    {
+        try {
+            $reportId = $this->svc->reportShare($id,
+                (string) $request->input('reason', ''),
+                $request->input('contact') !== null ? (string) $request->input('contact') : null);
+        } catch (\InvalidArgumentException $e) {
+            throw new ApiError(422, ['error' => $e->getMessage()]);
+        } catch (\RuntimeException) {
+            throw new ApiError(404, ['error' => 'unknown share']);
+        }
+        Api::audit($this->store, $id, 'reported', $request);
+        return response()->json(['reportId' => $reportId], 201);
+    }
 }

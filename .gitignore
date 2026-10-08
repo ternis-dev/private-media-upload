@@ -24,6 +24,9 @@ packages/*/dist/
 /docker-volumes/
 *.sqlite
 *.log
+**/.terraform/
+*.tfstate
+*.tfstate.*
 
 # OS / IDE
 .DS_Store

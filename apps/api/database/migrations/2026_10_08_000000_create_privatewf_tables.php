@@ -38,6 +38,7 @@ return new class() extends Migration
             $t->string('owner_id')->nullable();
             $t->integer('scanned')->default(0);
             $t->integer('e2ee')->default(0);
+            $t->string('thumb_key')->nullable();
         });
         Schema::create('shares', function (Blueprint $t): void {
             $t->string('id')->primary();
@@ -79,11 +80,20 @@ return new class() extends Migration
             $t->bigInteger('created_at');
             $t->bigInteger('last_used')->nullable();
         });
+        Schema::create('reports', function (Blueprint $t): void {
+            $t->string('id')->primary();
+            $t->string('share_id');
+            $t->string('reason');
+            $t->string('contact')->nullable();
+            $t->string('status')->default('open');
+            $t->bigInteger('created_at');
+            $t->index('status');
+        });
     }
 
     public function down(): void
     {
-        foreach (['tokens', 'users', 'ratelimits', 'access_log', 'shares', 'assets', 'uploads'] as $table) {
+        foreach (['reports', 'tokens', 'users', 'ratelimits', 'access_log', 'shares', 'assets', 'uploads'] as $table) {
             Schema::dropIfExists($table);
         }
     }

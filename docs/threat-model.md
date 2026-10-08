@@ -9,7 +9,7 @@ Scope: lean-PHP M1/M2a stack (SQLite, no accounts yet). Updated per milestone; L
 | A2 | Curious storage operator (L1/L2 hoster) | reads disks/buckets at rest | Partially — random keys, no listing; content visible unless **E2EE (M3: ciphertext only, key in fragment)** |
 | A3 | Curious server admin (us) | DB + vault access | Partially — argon2id hashes, audit log; **E2EE shares: ciphertext only (filenames/mime hidden in encrypted manifest)** |
 | A4 | Malware uploader | uploads EICAR-class payloads | No — ClamAV inline scan on staged path (M2a), direct-to-R2 deferred to async worker (M2b, tracked risk R1) |
-| A5 | Abuser (CSAM/extremism) | shares illegal content | Reporting flow M3; hashes (PhotoDNA-style) explicitly non-goal v1 |
+| A5 | Abuser (CSAM/extremism) | shares illegal content | Reporting flow live (`POST /v1/shares/:id/report` + `pwf:reports` + revoke-now); hashes (PhotoDNA-style) explicitly non-goal v1 |
 | A6 | Passive network observer | taps traffic | No — TLS terminates at edge (infra); HMAC/SigV4 URLs expire (15 min / 5 min L1-real) |
 | A7 | Forensic analyst (deleted data) | seizes disks post-purge | Purge deletes bytes + rows; SQLite WAL/VACUUM caveat (R2) |
 | A8 | Credential stuffer | password-sprays login/register | No — login 5/min/IP + generic errors (no enumeration), argon2id, min-12 account passwords |

@@ -24,7 +24,16 @@
 - [x] ADR-0004 (domain-before-framework), threat-model A8/R1-closed/R4-retired, Löschkonzept account cascade, openapi 0.3.0-M2b
 - [x] M3a Laravel 12 port: thin controllers over `packages/api-domain` (no Eloquent, custom Bearer kept, scheduler workers, pgsql via DSN + migration, 14 HTTP feature tests, live 5 MB + Range proof); real bugs fixed en route (Env precedence, Store PDO-before-mkdir); ADR-0006 records deviations (no Sanctum/Horizon/Redis yet)
 - [x] M3b E2EE core: AES-256-GCM PWF1 containers (key in #fragment, server blind) — format doc, 7 crypto tests (multi-chunk, tamper/wrong-key fail-closed), server opaqueness tests, quarantine-skip, web encrypt/decrypt wired, full-loop live proof (ciphertext on disk, IDENTICAL decrypt)
-- [ ] M3c (deferred): thumbnails, abuse-report flow, E2EE streaming decrypt >1 GB
+- [ ] M3c (deferred): abuse-report automation, E2EE streaming decrypt >1 GB
+
+## M4 — beta (DE) ✅ READY (closed beta; no public launch yet)
+- [x] Thumbnails (GD images, ffmpeg first-frame; never for E2EE; purge-safe; `?thumb=1` gated previews)
+- [x] Abuse reports (endpoint + `pwf:reports` review queue) + threat-model A5 workflow
+- [x] Deep health + security headers (incl. conditional HSTS, no-referrer for fragments)
+- [x] Prod stack: Dockerfiles, standalone prod compose (api/worker/nginx/web/pgsql/clamav), Terraform R2+DNS+TLS (**validated** vs provider v5 schema), `pwf:backup` + runbook (restore-then-purge), CHANGELOG, release workflow
+- [x] pgsql proven live (compat suite vs postgres:16, 8 assertions)
+- [ ] Launch checklist (needs real creds, not code): apply terraform, fill prod `.env`, DNS cutover, closed-beta invites, OIDC provider, status monitors, first restore drill
+- Deferred (honest): OIDC, Horizon/Redis (single-node), E2EE streaming decrypt, automated CSAM hashing (non-goal v1)
 
 ## M3 — E2EE + polish
 - Browser AES-GCM E2EE (key in `#fragment`), server-blind test.

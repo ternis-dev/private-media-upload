@@ -114,10 +114,34 @@ final class UploadService
         $sha = hash_file('sha256', $staging);
         $mime = $e2ee === 1 ? $up['mime'] : $this->resolveMime($staging, $up['mime']);
         $driver->putFile($up['storage_key'], $staging);
+        $thumbKey = $this->maybeThumb($driver, $up['storage_key'], $staging, $mime, $actual, $e2ee);
         $this->store->markComplete($uploadId);
         unlink($staging);
-        return $this->mintShare($up['tier'], $up['storage_key'], $actual, $sha, $mime, $up['filename'],
+        $done = $this->mintShare($up['tier'], $up['storage_key'], $actual, $sha, $mime, $up['filename'],
             $passwordHash, $maxViews, $burn, $up['owner_id'] ?? null, $this->scanner !== null && $e2ee === 0 ? 1 : 0, $e2ee);
+        if ($thumbKey !== null) {
+            $assetId = $this->store->getShare($done['shareId'])['asset_id'];
+            $this->store->setThumb($assetId, $thumbKey);
+        }
+        return $done;
+    }
+
+    /**
+     * Make + store a thumbnail when eligible (plaintext image/video under the
+     * size cap). Returns the thumb key or null. Never runs on ciphertext.
+     */
+    private function maybeThumb(StorageDriverInterface $driver, string $key, string $srcPath, string $mime, int $size, int $e2ee): ?string
+    {
+        if ($e2ee === 1) {
+            return null;
+        }
+        $jpeg = Thumbnailer::make($srcPath, $mime, $size);
+        if ($jpeg === null) {
+            return null;
+        }
+        $thumbKey = $key . '.thumb.jpg';
+        $driver->put($thumbKey, $jpeg, ['derived' => 'thumbnail']);
+        return $thumbKey;
     }
 
     /**
@@ -142,7 +166,28 @@ final class UploadService
             throw new \RuntimeException("size mismatch: declared {$size}, stored {$actual}");
         }
         $sha = hash('sha256', $driver->get($key));
-        return $this->mintShare('L1', $key, $actual, $sha, $mime, $filename, $passwordHash, $maxViews, $burn, $ownerId, 0, $e2ee);
+        $done = $this->mintShare('L1', $key, $actual, $sha, $mime, $filename, $passwordHash, $maxViews, $burn, $ownerId, 0, $e2ee);
+        if ($e2ee === 0 && ($mime === null || str_starts_with($mime, 'image/') || str_starts_with($mime, 'video/'))
+            && $actual <= Thumbnailer::MAX_SOURCE_BYTES) {
+            // Direct uploads have no staging file: materialize via ranged reads.
+            $tmp = sys_get_temp_dir() . '/pwf-dthumb-' . bin2hex(random_bytes(8)) . '.bin';
+            $fh = fopen($tmp, 'wb');
+            try {
+                for ($off = 0; $off < $actual; $off += 1048576) {
+                    fwrite($fh, $driver->readRange($key, $off, min(1048576, $actual - $off)));
+                }
+                fclose($fh);
+                $thumbKey = $this->maybeThumb($driver, $key, $tmp, $mime, $actual, 0);
+                if ($thumbKey !== null) {
+                    $this->store->setThumb($this->store->getShare($done['shareId'])['asset_id'], $thumbKey);
+                }
+            } finally {
+                if (is_file($tmp)) {
+                    unlink($tmp);
+                }
+            }
+        }
+        return $done;
     }
 
     /**
@@ -175,7 +220,7 @@ final class UploadService
         return 'ok';
     }
 
-    /** Delete blob via tier driver + drop metadata rows (burn / revoke / purge). */
+    /** Delete blob (+ thumbnail) via tier driver + drop metadata rows (burn / revoke / purge). */
     public function deleteShareBlob(string $shareId, callable $driverFor): bool
     {
         $row = $this->store->getShare($shareId);
@@ -183,7 +228,11 @@ final class UploadService
             return false;
         }
         try {
-            $driverFor($row['tier'])->delete($row['storage_key']);
+            $driver = $driverFor($row['tier']);
+            $driver->delete($row['storage_key']);
+            if (!empty($row['thumb_key'])) {
+                $driver->delete($row['thumb_key']);
+            }
         } catch (\Throwable) {
             // Blob already gone — still drop metadata.
         }
@@ -208,7 +257,7 @@ final class UploadService
         ];
     }
 
-    /** @return null|array{id,tier,badge,residency,filename,mime,size,sha256,expiresAt,expired,revoked,hasPassword,views,maxViews,burn,e2ee} */
+    /** @return null|array{id,tier,badge,residency,filename,mime,size,sha256,expiresAt,expired,revoked,hasPassword,views,maxViews,burn,e2ee,hasThumbnail} */
     public function meta(string $shareId): ?array
     {
         if (!Shares::validId($shareId)) {
@@ -235,7 +284,28 @@ final class UploadService
             'maxViews' => $row['max_views'] === null ? null : (int) $row['max_views'],
             'burn' => (int) $row['burn'] === 1,
             'e2ee' => (int) ($row['e2ee'] ?? 0) === 1,
+            'hasThumbnail' => !empty($row['thumb_key']),
         ];
+    }
+
+    /** File an abuse report (unauthenticated, rate-limited at HTTP). @return report id */
+    public function reportShare(string $shareId, string $reason, ?string $contact): string
+    {
+        $row = $this->store->getShare($shareId);
+        if ($row === null || $row['revoked_at'] !== null) {
+            throw new \RuntimeException('unknown share');
+        }
+        if (!in_array($reason, Store::REPORT_REASONS, true)) {
+            throw new \InvalidArgumentException(
+                'reason must be one of: ' . implode(',', Store::REPORT_REASONS));
+        }
+        if ($contact !== null && $contact !== '' &&
+            (!filter_var($contact, FILTER_VALIDATE_EMAIL) || strlen($contact) > 254)) {
+            throw new \InvalidArgumentException('invalid contact email');
+        }
+        $id = 'rp_' . Shares::newId(16);
+        $this->store->createReport($id, $shareId, $reason, $contact ?: null, time());
+        return $id;
     }
 
     /** Delete blobs + rows for expired shares. Returns deleted share count. */

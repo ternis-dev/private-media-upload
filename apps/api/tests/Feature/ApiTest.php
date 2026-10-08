@@ -235,4 +235,88 @@ final class ApiTest extends TestCase
         $za->close();
         unlink($tmp);
     }
+
+    public function test_deep_health_and_security_headers(): void
+    {
+        $res = $this->get('/v1/health')->assertOk();
+        $body = $res->json();
+        $this->assertTrue($body['ok']);
+        $this->assertSame('up', $body['checks']['db']);
+        $this->assertSame('up (emulation)', $body['checks']['storage']['L1']);
+        $this->assertSame('up (emulation)', $body['checks']['storage']['L2']);
+        $this->assertSame('up (emulation)', $body['checks']['storage']['L3']);
+        $this->assertSame('skipped', $body['checks']['clamav']);
+        $res->assertHeader('X-Content-Type-Options', 'nosniff');
+        $res->assertHeader('Referrer-Policy', 'no-referrer');
+        $res->assertHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    }
+
+    public function test_abuse_report_flow(): void
+    {
+        $done = $this->upload();
+        $this->postJson('/v1/shares/' . $done['shareId'] . '/report', ['reason' => 'spam'])
+            ->assertStatus(422);
+        $this->postJson('/v1/shares/00000000/report', ['reason' => 'other'])
+            ->assertNotFound();
+        $this->postJson('/v1/shares/' . $done['shareId'] . '/report',
+            ['reason' => 'malware', 'contact' => 'soc@example.com'])->assertCreated()
+            ->assertJsonStructure(['reportId']);
+        $this->artisan('pwf:reports')->expectsOutputToContain($done['shareId'])->assertSuccessful();
+    }
+
+    public function test_backup_command(): void
+    {
+        $dir = sys_get_temp_dir() . '/pwf-feat-bak-' . bin2hex(random_bytes(4));
+        putenv('VAR_DIR=' . $dir . '/var');
+        putenv('DB_PATH=' . $dir . '/var/privatewf.sqlite');
+        $this->upload();
+        $this->artisan('pwf:backup')->assertSuccessful();
+        $snaps = glob($dir . '/var/backups/privatewf-*.sqlite') ?: [];
+        $this->assertCount(1, $snaps);
+        $manifests = glob($dir . '/var/backups/manifest-*.json') ?: [];
+        $this->assertCount(1, $manifests);
+    }
+
+    public function test_image_thumbnail_over_http(): void
+    {
+        if (!extension_loaded('gd')) {
+            $this->markTestSkipped('gd missing');
+        }
+        $img = imagecreatetruecolor(800, 600);
+        imagefill($img, 0, 0, imagecolorallocate($img, 30, 30, 200));
+        ob_start();
+        imagepng($img);
+        $png = ob_get_clean();
+        unset($img);
+
+        $init = $this->postJson('/v1/uploads/init', [
+            'tier' => 'L3', 'filename' => 'photo.png', 'size' => strlen($png), 'mime' => 'image/png',
+        ])->assertCreated()->json();
+        $this->raw('PUT', '/v1/uploads/' . $init['uploadId'], $png)->assertOk();
+        $done = $this->postJson('/v1/uploads/' . $init['uploadId'] . '/complete')->assertCreated()->json();
+        $meta = $this->getJson('/v1/shares/' . $done['shareId'] . '/meta')->assertOk()->json();
+        $this->assertTrue($meta['hasThumbnail']);
+
+        $loc = $this->get('/s/' . $done['shareId'])->assertRedirect()->headers->get('Location');
+        $parts = parse_url($loc);
+        $this->get($parts['path'] . '?' . ($parts['query'] ?? ''))->assertOk()
+            ->assertStreamedContent($png);
+
+        // Thumbnail preview: 302 without consuming, JPEG bytes, password-gated.
+        $thumbLoc = $this->get('/s/' . $done['shareId'] . '?thumb=1')->assertRedirect()->headers->get('Location');
+        $tp = parse_url($thumbLoc);
+        $thumb = $this->get($tp['path'] . '?' . ($tp['query'] ?? ''))->assertOk();
+        $this->assertSame("\xFF\xD8", substr($thumb->streamedContent(), 0, 2));
+        // Views untouched by previews: share still alive.
+        $this->getJson('/v1/shares/' . $done['shareId'] . '/meta')->assertOk();
+    }
+
+    public function test_thumbnail_needs_password_and_existence(): void
+    {
+        $done = $this->upload();
+        $this->get('/s/' . $done['shareId'] . '?thumb=1')->assertNotFound();
+
+        $prot = $this->upload(['password' => 'thumb-pw-123456']);
+        $this->get('/s/' . $prot['shareId'] . '?thumb=1')->assertUnauthorized();
+    }
 }

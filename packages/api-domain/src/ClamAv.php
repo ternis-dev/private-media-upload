@@ -26,6 +26,26 @@ final class ClamAv
         return $this->host !== '';
     }
 
+    /** Liveness PING → PONG (false when disabled/unreachable). */
+    public function ping(): bool
+    {
+        if (!$this->enabled()) {
+            return false;
+        }
+        try {
+            $sock = fsockopen($this->host, $this->port, $errno, $errstr, 5);
+            if ($sock === false) {
+                return false;
+            }
+            fwrite($sock, "zPING\0");
+            $res = trim(fgets($sock) ?: '');
+            fclose($sock);
+            return $res === 'PONG';
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     /** @return null|string virus name when FOUND, null when clean/skipped */
     public function scanFile(string $path): ?string
     {

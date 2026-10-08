@@ -21,6 +21,14 @@ final class ShortLinkController extends Controller
     public function show(Request $request, string $id): RedirectResponse
     {
         $row = Api::need($this->store, $this->store->getShare($id), $id, $request);
+        // Thumbnail preview: same gates, but never consumes a view (preview ≠ read).
+        if ($request->query('thumb') !== null) {
+            if (empty($row['thumb_key'])) {
+                throw new ApiError(404, ['error' => 'no thumbnail']);
+            }
+            Api::audit($this->store, $id, 'thumb-ok', $request);
+            return redirect()->to(Drivers::forTier($row['tier'])->signedGetUrl($row['thumb_key'], 900), 302);
+        }
         $driver = Drivers::forTier($row['tier']);
         $isL1Real = $row['tier'] === 'L1' && $driver instanceof R2S3Driver && $driver->isReal();
         if ($isL1Real) {

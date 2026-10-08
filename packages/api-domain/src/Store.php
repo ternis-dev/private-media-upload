@@ -66,6 +66,17 @@ final class Store
         return $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'pgsql';
     }
 
+    /** Liveness probe for deep health (no writes). */
+    public function ping(): bool
+    {
+        try {
+            $this->pdo->query('SELECT 1');
+            return is_dir($this->varDir) && is_writable($this->varDir);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public static function open(string $dbPath, string $varDir): self
     {
         // Directories first: PDO sqlite cannot create missing parent dirs,
@@ -113,8 +124,12 @@ final class Store
               token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
               name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used INTEGER NULL);
             CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
+            CREATE TABLE IF NOT EXISTS reports(
+              id TEXT PRIMARY KEY, share_id TEXT NOT NULL, reason TEXT NOT NULL,
+              contact TEXT NULL, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
             SQL);
-        // Columns on pre-existing DBs (both drivers).
+        // M2b columns + M4 (thumb_key, reports table).
         $existing = static function (string $table) use ($pdo, $pgsql): array {
             if ($pgsql) {
                 $st = $pdo->prepare(
@@ -130,7 +145,7 @@ final class Store
                 'revoked_at' => 'INTEGER NULL'],
             'uploads' => ['owner_id' => 'TEXT NULL'],
             'assets' => ['owner_id' => 'TEXT NULL', 'scanned' => 'INTEGER NOT NULL DEFAULT 0',
-                'e2ee' => 'INTEGER NOT NULL DEFAULT 0'],
+                'e2ee' => 'INTEGER NOT NULL DEFAULT 0', 'thumb_key' => 'TEXT NULL'],
         ] as $table => $cols) {
             $have = $existing($table);
             foreach ($cols as $col => $ddl) {
@@ -217,19 +232,19 @@ final class Store
     public function getShare(string $id): ?array
     {
         $st = $this->pdo->prepare(
-            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned,a.e2ee
+            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned,a.e2ee,a.thumb_key
              FROM shares s JOIN assets a ON a.id=s.asset_id WHERE s.id=:id');
         $st->execute(['id' => $id]);
         $row = $st->fetch();
         return $row === false ? null : $row;
     }
 
-    /** Same join by storage key (blob route only knows the key). */
+    /** Same join by storage key (blob route only knows the key; thumbs included). */
     public function getShareByKey(string $storageKey): ?array
     {
         $st = $this->pdo->prepare(
-            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned,a.e2ee
-             FROM shares s JOIN assets a ON a.id=s.asset_id WHERE a.storage_key=:k');
+            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned,a.e2ee,a.thumb_key
+             FROM shares s JOIN assets a ON a.id=s.asset_id WHERE a.storage_key=:k OR a.thumb_key=:k');
         $st->execute(['k' => $storageKey]);
         $row = $st->fetch();
         return $row === false ? null : $row;
@@ -521,6 +536,43 @@ final class Store
     {
         $st = $this->pdo->prepare('DELETE FROM assets WHERE id=:id');
         $st->execute(['id' => $assetId]);
+    }
+
+    public function setThumb(string $assetId, string $thumbKey): void
+    {
+        $st = $this->pdo->prepare('UPDATE assets SET thumb_key=:k WHERE id=:id');
+        $st->execute(['k' => $thumbKey, 'id' => $assetId]);
+    }
+
+    public const REPORT_REASONS = ['csam', 'terror', 'copyright', 'malware', 'other'];
+
+    public function createReport(string $id, string $shareId, string $reason, ?string $contact, int $now): void
+    {
+        $st = $this->pdo->prepare(
+            'INSERT INTO reports(id,share_id,reason,contact,status,created_at)
+             VALUES(:id,:share,:reason,:contact,\'open\',:now)');
+        $st->execute(['id' => $id, 'share' => $shareId, 'reason' => $reason, 'contact' => $contact, 'now' => $now]);
+    }
+
+    /** @return list<array{id,share_id,reason,contact,status,created_at}> */
+    public function listReports(string $status = 'open', int $limit = 100): array
+    {
+        $st = $this->pdo->prepare(
+            'SELECT id,share_id,reason,contact,status,created_at FROM reports
+             WHERE status=:s ORDER BY created_at DESC LIMIT :lim');
+        $st->bindValue(':s', $status);
+        $st->bindValue(':lim', $limit, PDO::PARAM_INT);
+        $st->execute();
+        return $st->fetchAll();
+    }
+
+    public function setReportStatus(string $id, string $status): void
+    {
+        if (!in_array($status, ['open', 'actioned', 'dismissed'], true)) {
+            throw new \InvalidArgumentException('invalid report status');
+        }
+        $st = $this->pdo->prepare('UPDATE reports SET status=:s WHERE id=:id');
+        $st->execute(['s' => $status, 'id' => $id]);
     }
 
     /** Test helper: force expiry. */
