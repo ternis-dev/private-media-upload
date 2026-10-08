@@ -1,22 +1,37 @@
 'use client';
 import { useState } from 'react';
 import { TIERS, type TierId } from '../lib/tiers';
+import { CHUNK_BYTES, appendChunk, completeUpload, initUpload } from '../lib/uploads';
+
+const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 
 export default function Home() {
   const [tier, setTier] = useState<TierId>('L2');
-  const [result, setResult] = useState<string>('');
+  const [file, setFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState('');
+  const [share, setShare] = useState('');
 
-  async function initUpload() {
-    setResult('connecting to API…');
+  async function upload() {
+    if (!file) {
+      setProgress('pick a file first');
+      return;
+    }
     try {
-      const r = await fetch('http://localhost:8000/v1/uploads/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier, filename: 'demo.mp4', size: 1024, mime: 'video/mp4' }),
-      });
-      setResult(`${r.status} ${await r.text()}`);
+      setProgress('reserving…');
+      const init = await initUpload(API, { tier, filename: file.name, size: file.size, mime: file.type || 'application/octet-stream' });
+      let offset = 0;
+      while (offset < file.size) {
+        const chunk = file.slice(offset, offset + CHUNK_BYTES);
+        const p = await appendChunk(API, init.uploadId, chunk);
+        offset = p.received;
+        setProgress(`uploading… ${((offset / file.size) * 100).toFixed(0)}% (${init.tier})`);
+      }
+      setProgress('finalizing…');
+      const done = await completeUpload(API, init.uploadId);
+      setShare(done.shareUrl);
+      setProgress('done ✓');
     } catch (e) {
-      setResult(`API unreachable (${String(e)}). Run: composer serve in apps/api.`);
+      setProgress(`failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -30,11 +45,18 @@ export default function Home() {
           <div style={{ opacity: 0.7 }}>{t.hint}</div>
         </label>
       ))}
-      <button onClick={initUpload} style={{ padding: '10px 18px', fontSize: 16 }}>
-        Init upload ({tier})
-      </button>
-      <pre>{result}</pre>
-      <p style={{ opacity: 0.6 }}>M0: init-only. Bytes flow in M1 (L1 presigned R2 / L2-L3 tus).</p>
+      <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <div style={{ marginTop: 12 }}>
+        <button onClick={upload} style={{ padding: '10px 18px', fontSize: 16 }}>
+          Upload{file ? ` ${file.name} (${(file.size / 1048576).toFixed(1)} MB)` : ''} via {tier}
+        </button>
+      </div>
+      <pre>{progress}</pre>
+      {share && (
+        <p>
+          Share link: <a href={share}>{share}</a>
+        </p>
+      )}
     </>
   );
 }

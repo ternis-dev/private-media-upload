@@ -50,8 +50,30 @@ final class Shares
 
     public static function defaultExpiry(string $tier): string
     {
+        return gmdate('c', self::defaultExpiryUnix($tier));
+    }
+
+    public static function defaultExpiryUnix(string $tier): int
+    {
         // L1/L2 7d, L3 30d — see .plans/01-privacy-tiers.md
-        $days = $tier === 'L3' ? 30 : 7;
-        return gmdate('c', time() + $days * 86400);
+        return time() + ($tier === 'L3' ? 30 : 7) * 86400;
+    }
+
+    public static function badge(string $tier): string
+    {
+        return match ($tier) {
+            'L1' => 'Global edge 🌍',
+            'L2' => 'DE-only 🇩🇪',
+            'L3' => 'DE-only 🇩🇪 · sovereign',
+            default => 'unknown',
+        };
+    }
+
+    /** Strip path components + unsafe chars for the storage key suffix (display name stays in DB). */
+    public static function safeBasename(string $filename): string
+    {
+        $base = basename(str_replace("\0", '', $filename));
+        $safe = preg_replace('/[^0-9A-Za-z._-]+/', '_', $base) ?? 'file';
+        return substr($safe !== '' ? $safe : 'file', 0, 80);
     }
 }

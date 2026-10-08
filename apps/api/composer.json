@@ -1,10 +1,14 @@
 {
   "name": "ternis/private-wf-api",
-  "description": "private.wf API (M0 lean PHP; target: Laravel 12/13 API per ADR-0001)",
+  "description": "private.wf API (M1 lean PHP; Laravel migration M2+ per ADR-0001)",
   "license": "AGPL-3.0-or-later",
   "type": "project",
+  "repositories": [
+    { "type": "path", "url": "../../packages/storage-drivers", "options": { "symlink": false } }
+  ],
   "require": {
-    "php": "^8.3"
+    "php": "^8.3",
+    "ternis/storage-drivers": "@dev"
   },
   "require-dev": {
     "phpunit/phpunit": "^11.0"
@@ -17,6 +21,7 @@
   },
   "scripts": {
     "test": "phpunit --colors=always",
-    "serve": "php -S localhost:8000 -t public"
+    "serve": "php -S localhost:8000 -t public",
+    "purge": "php bin/purge.php"
   }
 }

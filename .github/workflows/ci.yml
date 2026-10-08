@@ -10,10 +10,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
-        with: { php-version: '8.3' }
+        with: { php-version: '8.3', extensions: curl }
       - run: composer install --no-interaction
         working-directory: packages/storage-drivers
       - run: vendor/bin/phpunit --colors=never
+        working-directory: packages/storage-drivers
+      - name: Live MinIO roundtrip (R2 stand-in)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:9000/minio/health/live && break || sleep 3
+          done
+          TEST_MINIO_ENDPOINT=http://localhost:9000 vendor/bin/phpunit --colors=never --filter R2Minio
         working-directory: packages/storage-drivers
 
   api:
@@ -26,7 +36,7 @@ jobs:
         working-directory: apps/api
       - run: vendor/bin/phpunit --colors=never
         working-directory: apps/api
-      - run: php -l public/index.php && php -l src/Shares.php
+      - run: for f in public/index.php bin/purge.php src/Shares.php src/Store.php src/UploadService.php src/Drivers.php src/HttpRange.php; do php -l $f; done
         working-directory: apps/api
 
   web:
@@ -37,7 +47,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '22', cache: 'pnpm', cache-dependency-path: apps/web/pnpm-lock.yaml }
       - run: pnpm install --dir apps/web || npm install --prefix apps/web
-      - run: node --test test/tiers.test.mjs
+      - run: node --test test/tiers.test.mjs test/uploads.test.mjs
+        working-directory: apps/web
+      - run: npx -y esbuild@0.24 app/page.tsx "app/s/[id]/page.tsx" lib/tiers.ts lib/uploads.ts lib/e2ee.ts --jsx=automatic --outdir=/tmp/esbuild-check --log-level=warning
         working-directory: apps/web
 
   compose:

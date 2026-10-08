@@ -44,6 +44,7 @@ final class StorageDriverContractTest extends TestCase
         $d->put($key, 'hello-private-wf');
         $this->assertTrue($d->exists($key));
         $this->assertSame('hello-private-wf', $d->get($key));
+        $this->assertSame(16, $d->size($key));
         // overwrite
         $d->put($key, 'v2');
         $this->assertSame('v2', $d->get($key));
@@ -53,10 +54,35 @@ final class StorageDriverContractTest extends TestCase
 
     /** @dataProvider drivers */
     #[\PHPUnit\Framework\Attributes\DataProvider('drivers')]
+    public function test_putfile_roundtrip_without_memory_load(StorageDriverInterface $d): void
+    {
+        $src = tempnam(sys_get_temp_dir(), 'pwf-src-');
+        file_put_contents($src, str_repeat('0123456789abcdef', 4096)); // 64 KiB
+        $key = 'u/test/' . bin2hex(random_bytes(6)) . '.bin';
+        try {
+            $d->putFile($key, $src);
+            $this->assertSame(65536, $d->size($key));
+            $this->assertSame(hash_file('sha256', $src), hash('sha256', $d->get($key)));
+        } finally {
+            $d->delete($key);
+            unlink($src);
+        }
+    }
+
+    /** @dataProvider drivers */
+    #[\PHPUnit\Framework\Attributes\DataProvider('drivers')]
     public function test_get_missing_throws(StorageDriverInterface $d): void
     {
         $this->expectException(\RuntimeException::class);
         $d->get('u/missing/' . bin2hex(random_bytes(6)));
+    }
+
+    /** @dataProvider drivers */
+    #[\PHPUnit\Framework\Attributes\DataProvider('drivers')]
+    public function test_size_missing_throws(StorageDriverInterface $d): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $d->size('u/missing/' . bin2hex(random_bytes(6)));
     }
 
     /** @dataProvider drivers */

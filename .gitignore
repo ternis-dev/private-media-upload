@@ -35,3 +35,4 @@ packages/*/dist/
 # Uploads (never commit real media)
 /uploads/
 /tmp-uploads/
+**/var/

@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: private.wf API
-  version: 0.0.1-M0
-  description: Single source of truth for apps/api + apps/web. M0: health/tiers/upload-init. M1: complete/chunked/blob/share-meta.
+  version: 0.1.0-M1
+  description: Single source of truth for apps/api + apps/web. M1: chunked byte flows for all tiers, real SigV4 for L1, Range streaming, purge CLI.
 servers:
   - url: http://localhost:8000
 paths:
@@ -10,17 +10,15 @@ paths:
     get:
       summary: Liveness
       responses:
-        '200':
-          description: ok
+        '200': { description: ok }
   /v1/tiers:
     get:
       summary: Privacy tiers L1/L2/L3
       responses:
-        '200':
-          description: tiers
+        '200': { description: tiers }
   /v1/uploads/init:
     post:
-      summary: Validate + reserve upload (M0). M1 returns presigned/tus target.
+      summary: Reserve upload. L1 real mode returns SigV4 presignedPutUrl; else proxy via appendUrl.
       requestBody:
         required: true
         content:
@@ -34,12 +32,74 @@ paths:
                 size: { type: integer, minimum: 1, maximum: 5368709120 }
                 mime: { type: string, default: application/octet-stream }
       responses:
-        '201': { description: reserved }
+        '201': { description: '{uploadId, key, appendUrl, mode, presignedPutUrl?}' }
         '422': { description: validation error }
+        '502': { description: L1 storage unreachable }
+  /v1/uploads/{uploadId}:
+    parameters:
+      - { name: uploadId, in: path, required: true, schema: { type: string, pattern: '^up_[0-9A-Za-z]{8,32}$' } }
+    put:
+      summary: Append raw bytes (repeatable 4–10 MB chunks)
+      responses:
+        '200': { description: '{received, expected, done}' }
+        '404': { description: unknown upload }
+        '413': { description: exceeds declared size }
+    post:
+      summary: Alias of PUT (proxy-friendly)
+      responses:
+        '200': { description: '{received, expected, done}' }
+  /v1/uploads/{uploadId}/complete:
+    post:
+      summary: Verify size/sha256, streaming putFile into tier driver, mint share
+      parameters:
+        - { name: uploadId, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: '{shareId, shareUrl, size, sha256, expiresAt}' }
+        '422': { description: incomplete upload }
+  /v1/uploads/l1-complete:
+    post:
+      summary: Finalize browser-direct-to-R2 upload (server verifies existence + size)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, filename, size]
+              properties:
+                key: { type: string, pattern: '^u/l1/' }
+                filename: { type: string }
+                size: { type: integer, minimum: 1 }
+                mime: { type: string }
+      responses:
+        '201': { description: share }
+        '422': { description: object missing / size mismatch }
   /v1/shares/{id}/meta:
     get:
       summary: Share metadata (no bytes)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, pattern: '^[0-9A-Za-z]{8,32}$' } }
       responses:
-        '200': { description: meta (M0 stub) }
+        '200': { description: '{tier, badge, residency, filename, mime, size, sha256, expiresAt}' }
+        '404': { description: unknown (or purged) }
+        '410': { description: expired, purge pending }
+  /v1/blobs/{key}:
+    get:
+      summary: Stream bytes. HMAC ?expires&sig. Range supported. L1 real mode 302s to R2.
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: bytes }
+        '206': { description: partial content }
+        '403': { description: bad/expired signature }
+        '410': { description: blob purged }
+        '416': { description: unsatisfiable range }
+  /s/{id}:
+    get:
+      summary: Short link → 302 to tier-appropriate signed URL
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '302': { description: redirect }
+        '404': { description: unknown }
+        '410': { description: expired }

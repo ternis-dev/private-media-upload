@@ -8,13 +8,16 @@
 - [x] M0 code slice: `packages/storage-drivers` (Tier L1/L2/L3 + 3 drivers + contract tests), `apps/api` lean router (health/tiers/upload-init, Laravel lands M1 per ADR-0001), `apps/web` tier picker + share stub, `packages/shared-types/openapi.yaml` v0.0.1-M0
 - DoD: fresh clone → `docker compose up` → hello pages for api+web.
 
-## M1 — L1 + L3 slices (2–3 wks)
-- L1 direct-to-R2 (MinIO in dev) init/complete + share link + expiry purge.
-- L3 local-disk tus upload + stream download + `DE-only` badge.
-- Contract tests for `R2S3Driver` + `LocalSovereignDriver`.
-- DoD: upload 100 MB → share → expiry → bytes gone (covered by test).
+## M1 — L1 + L3 slices ✅ DONE (lean-PHP M1; Laravel migration moved to M2+)
+- [x] L1 init/complete: real SigV4 presigned PUT/GET via aws-sdk (endpoint override covers R2/MinIO/Hetzner), emulation fallback for zero-infra dev; `ensureBucket`; live roundtrip test env-gated (CI runs MinIO)
+- [x] L3 chunked upload (reserve → append → complete) + HMAC signed streaming + Range (206) + `DE-only` badge in meta
+- [x] SQLite metadata (uploads/assets/shares), `bin/purge.php`, expiry 410 → purge → bytes gone (proven live: 100 MB L3 chunked, sha-identical, vault empty after purge)
+- [x] Contract tests extended (`size`, `putFile`); api 19 tests green; web wired to real endpoints (uploads lib + share page) + esbuild check
+- [x] `packages/shared-types/openapi.yaml` v0.1.0-M1
+- DoD: upload 100 MB → share → expiry → bytes gone (covered by test). ✅ proven 2026-10-08
 
-## M2 — L2 vault + hardening (2–3 wks)
+## M2 — L2 vault + hardening + Laravel migration (2–3 wks)
+- Laravel 12/13 API migration (per ADR-0001; port Store/UploadService/Drivers + pgsql)
 - SFTP driver (Hetzner Storage Box compat) + tus proxy + LUKS notes.
 - Password shares, max-views/burn, rate limits, ClamAV, audit log.
 - GDPR export/delete + Löschkonzept doc.

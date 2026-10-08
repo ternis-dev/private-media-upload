@@ -38,6 +38,23 @@ final class LocalSovereignDriver implements StorageDriverInterface
         rename($tmp, $path);
     }
 
+    public function putFile(string $key, string $path, array $meta = []): void
+    {
+        if (!is_file($path)) {
+            throw new \InvalidArgumentException("no such file: {$path}");
+        }
+        $dest = $this->path($key);
+        $dir = dirname($dest);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0700, true);
+        }
+        $tmp = $dest . '.' . bin2hex(random_bytes(8)) . '.tmp';
+        if (!copy($path, $tmp)) {
+            throw new \RuntimeException("copy failed: {$key}");
+        }
+        rename($tmp, $dest);
+    }
+
     public function get(string $key): string
     {
         $path = $this->path($key);
@@ -54,6 +71,16 @@ final class LocalSovereignDriver implements StorageDriverInterface
     public function exists(string $key): bool
     {
         return is_file($this->path($key));
+    }
+
+    public function size(string $key): int
+    {
+        $path = $this->path($key);
+        $size = is_file($path) ? filesize($path) : false;
+        if ($size === false) {
+            throw new \RuntimeException("not found: {$key}");
+        }
+        return $size;
     }
 
     public function delete(string $key): void
@@ -82,6 +109,12 @@ final class LocalSovereignDriver implements StorageDriverInterface
     }
 
     private function path(string $key): string
+    {
+        return $this->localPath($key);
+    }
+
+    /** Absolute FS path backing $key. Used for zero-copy streaming (sendfile/fpassthru). */
+    public function localPath(string $key): string
     {
         if (str_contains($key, '..')) {
             throw new \InvalidArgumentException('invalid key');

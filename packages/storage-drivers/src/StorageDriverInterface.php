@@ -11,8 +11,14 @@ interface StorageDriverInterface
     /** Store bytes under $key (opaque object key, e.g. "u/<uid>/<sha256>"). */
     public function put(string $key, string $contents, array $meta = []): void;
 
+    /** Store file at $path under $key without loading it into memory. */
+    public function putFile(string $key, string $path, array $meta = []): void;
+
     /** @throws \RuntimeException when key does not exist */
     public function get(string $key): string;
+
+    /** @throws \RuntimeException when key does not exist */
+    public function size(string $key): int;
 
     public function exists(string $key): bool;
 
