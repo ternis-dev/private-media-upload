@@ -42,7 +42,7 @@ jobs:
         working-directory: apps/api
       - run: vendor/bin/phpunit --colors=never
         working-directory: apps/api
-      - run: for f in public/index.php bin/purge.php src/Shares.php src/Store.php src/UploadService.php src/Drivers.php src/HttpRange.php src/ClamAv.php; do php -l $f; done
+      - run: for f in public/index.php bin/purge.php bin/quarantine.php src/Shares.php src/Store.php src/UploadService.php src/Drivers.php src/HttpRange.php src/ClamAv.php; do php -l $f; done
         working-directory: apps/api
 
   web:
@@ -55,8 +55,33 @@ jobs:
       - run: pnpm install --dir apps/web || npm install --prefix apps/web
       - run: node --test test/tiers.test.mjs test/uploads.test.mjs
         working-directory: apps/web
-      - run: npx -y esbuild@0.24 app/page.tsx "app/s/[id]/page.tsx" lib/tiers.ts lib/uploads.ts lib/e2ee.ts --jsx=automatic --outdir=/tmp/esbuild-check --log-level=warning
+      - run: npx -y esbuild@0.24 app/page.tsx "app/s/[id]/page.tsx" app/me/page.tsx lib/tiers.ts lib/uploads.ts lib/e2ee.ts --jsx=automatic --outdir=/tmp/esbuild-check --log-level=warning
         working-directory: apps/web
+
+  # Bonus live signal (freshclam on first boot is slow/flaky → non-blocking).
+  quarantine-e2e:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with: { php-version: '8.3', extensions: zip }
+      - run: composer install --no-interaction
+        working-directory: apps/api
+      - name: ClamAV daemon + EICAR quarantine proof
+        run: |
+          docker run -d --name clamav -p 3310:3310 clamav/clamav:latest
+          for i in $(seq 1 100); do
+            docker exec clamav clamdcheck.sh >/dev/null 2>&1 && break || sleep 6
+          done
+          printf 'X5O!P%%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/eicar.txt
+          CLAMAV_HOST=localhost php -r '
+            require "vendor/autoload.php";
+            $clam = new PrivateWf\Api\ClamAv("localhost");
+            $hit = $clam->scanFile("/tmp/eicar.txt");
+            if ($hit === null) { fwrite(STDERR, "EICAR NOT detected\n"); exit(1); }
+            echo "EICAR detected: $hit\n";'
+        working-directory: apps/api
 
   compose:
     runs-on: ubuntu-latest

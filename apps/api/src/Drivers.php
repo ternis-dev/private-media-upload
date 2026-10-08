@@ -53,4 +53,20 @@ final class Drivers
     {
         return getenv('AUDIT_SALT') ?: self::hmacSecret();
     }
+
+    /** Default per-user quota (bytes). */
+    public static function defaultQuota(): int
+    {
+        return (int) (getenv('USER_QUOTA_BYTES') ?: 10 * 1024 * 1024 * 1024);
+    }
+
+    /** Bearer token from Authorization header. */
+    public static function bearer(): ?string
+    {
+        $h = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+        if (preg_match('/^Bearer\s+(\S+)$/', $h, $m)) {
+            return $m[1];
+        }
+        return null;
+    }
 }

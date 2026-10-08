@@ -51,11 +51,15 @@ final class UploadService
     }
 
     /** @return array{uploadId: string, key: string, tier: string, expected: int} */
-    public function reserve(string $tier, string $filename, int $size, string $mime): array
+    public function reserve(string $tier, string $filename, int $size, string $mime, ?string $ownerId = null, ?int $quotaBytes = null): array
     {
         [$ok, $err] = Shares::validateInit(['tier' => $tier, 'filename' => $filename, 'size' => $size, 'mime' => $mime]);
         if (!$ok) {
             throw new \InvalidArgumentException($err);
+        }
+        if ($ownerId !== null && $quotaBytes !== null
+            && $this->store->userUsage($ownerId) + $size > $quotaBytes) {
+            throw new \RuntimeException('quota exceeded');
         }
         $uploadId = 'up_' . Shares::newId(16);
         $key = sprintf('u/%s/%s/%s-%s', strtolower($tier), gmdate('Y-m-d'), $uploadId, Shares::safeBasename($filename));
@@ -63,7 +67,7 @@ final class UploadService
         $this->store->reserveUpload([
             'id' => $uploadId, 'tier' => $tier, 'filename' => $filename,
             'mime' => $mime, 'expected' => $size, 'storage_key' => $key, 'now' => $now,
-        ]);
+        ], $ownerId);
         touch($this->store->stagingPath($uploadId));
         return ['uploadId' => $uploadId, 'key' => $key, 'tier' => $tier, 'expected' => $size];
     }
@@ -112,7 +116,7 @@ final class UploadService
         $this->store->markComplete($uploadId);
         unlink($staging);
         return $this->mintShare($up['tier'], $up['storage_key'], $actual, $sha, $mime, $up['filename'],
-            $passwordHash, $maxViews, $burn);
+            $passwordHash, $maxViews, $burn, $up['owner_id'] ?? null, $this->scanner !== null ? 1 : 0);
     }
 
     /**
@@ -121,7 +125,7 @@ final class UploadService
      * NOTE: inline malware scan covers the staged path only; direct uploads
      * are scanned by the async worker (M2b). See docs/threat-model.md.
      */
-    public function completeL1(string $key, string $filename, int $size, string $mime, R2S3Driver $driver, array $opts = []): array
+    public function completeL1(string $key, string $filename, int $size, string $mime, R2S3Driver $driver, array $opts = [], ?string $ownerId = null): array
     {
         [$passwordHash, $maxViews, $burn] = self::validateShareOptions($opts);
         [$ok, $err] = Shares::validateInit(['tier' => 'L1', 'filename' => $filename, 'size' => $size, 'mime' => $mime]);
@@ -136,7 +140,7 @@ final class UploadService
             throw new \RuntimeException("size mismatch: declared {$size}, stored {$actual}");
         }
         $sha = hash('sha256', $driver->get($key));
-        return $this->mintShare('L1', $key, $actual, $sha, $mime, $filename, $passwordHash, $maxViews, $burn);
+        return $this->mintShare('L1', $key, $actual, $sha, $mime, $filename, $passwordHash, $maxViews, $burn, $ownerId, 0);
     }
 
     /**
@@ -244,14 +248,14 @@ final class UploadService
     }
 
     /** @return array{shareId,shareUrl,tier,size,sha256,mime,expiresAt} */
-    private function mintShare(string $tier, string $storageKey, int $size, string $sha, string $mime, string $filename, ?string $passwordHash = null, ?int $maxViews = null, int $burn = 0): array
+    private function mintShare(string $tier, string $storageKey, int $size, string $sha, string $mime, string $filename, ?string $passwordHash = null, ?int $maxViews = null, int $burn = 0, ?string $ownerId = null, int $scanned = 0): array
     {
         $now = time();
         $assetId = 'as_' . Shares::newId(16);
         $this->store->createAsset([
             'id' => $assetId, 'tier' => $tier, 'storage_key' => $storageKey,
             'size' => $size, 'sha256' => $sha, 'mime' => $mime, 'filename' => $filename, 'now' => $now,
-        ]);
+        ], $ownerId, $scanned);
         $shareId = Shares::newId();
         $expires = Shares::defaultExpiryUnix($tier);
         $this->store->createShare([
@@ -277,6 +281,182 @@ final class UploadService
             unlink($stagingPath);
             throw new \RuntimeException('rejected: malware detected (' . $virus . ')');
         }
+    }
+
+    // ---------- M2b: accounts, tus, quarantine ----------
+
+    /** @return array{id: string} */
+    public function register(string $email, string $password, int $quotaBytes): array
+    {
+        $email = strtolower(trim($email));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 254) {
+            throw new \InvalidArgumentException('invalid email');
+        }
+        if (strlen($password) < 12 || strlen($password) > 256) {
+            throw new \InvalidArgumentException('account password must be 12..256 chars');
+        }
+        $id = 'us_' . Shares::newId(16);
+        $this->store->createUser($id, $email, password_hash($password, PASSWORD_ARGON2ID), $quotaBytes, time());
+        return ['id' => $id];
+    }
+
+    /** @return array{token: string} generic failure (no user enumeration) */
+    public function login(string $email, string $password, string $tokenName = 'api'): array
+    {
+        $user = $this->store->findUserByEmail(strtolower(trim($email)));
+        if ($user === null || !password_verify($password, $user['pw_hash'])) {
+            throw new \RuntimeException('invalid credentials');
+        }
+        $token = 'pwf_' . rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        $this->store->createToken(hash('sha256', $token), $user['id'], substr($tokenName, 0, 80), time());
+        return ['token' => $token];
+    }
+
+    /** @return null|array{id,email,quota_bytes,token_name} */
+    public function userFromToken(?string $bearer): ?array
+    {
+        if ($bearer === null || !str_starts_with($bearer, 'pwf_')) {
+            return null;
+        }
+        return $this->store->findUserByTokenHash(hash('sha256', $bearer), time());
+    }
+
+    /**
+     * tus 1.0.0 Creation (subset): Upload-Length + Upload-Metadata required.
+     * Metadata: "filename <b64>[,type <b64>]". Returns upload row for response.
+     */
+    public function tusCreate(string $tier, int $length, string $metadata, ?string $ownerId, ?int $quotaBytes): array
+    {
+        if ($length < 1 || $length > Shares::MAX_FILE_BYTES) {
+            throw new \InvalidArgumentException('Upload-Length must be 1..5GB');
+        }
+        $meta = self::parseTusMetadata($metadata);
+        if (!isset($meta['filename'])) {
+            throw new \InvalidArgumentException('Upload-Metadata must include filename');
+        }
+        $filename = base64_decode($meta['filename'], true);
+        $mime = isset($meta['filetype']) ? base64_decode($meta['filetype'], true) : 'application/octet-stream';
+        if ($filename === false || $filename === '') {
+            throw new \InvalidArgumentException('invalid filename encoding');
+        }
+        if ($mime === false || $mime === '') {
+            $mime = 'application/octet-stream';
+        }
+        return $this->reserve($tier, $filename, $length, $mime, $ownerId, $quotaBytes);
+    }
+
+    /** @return array<string,string> */
+    public static function parseTusMetadata(string $header): array
+    {
+        $out = [];
+        foreach (explode(',', $header) as $pair) {
+            $pair = trim($pair);
+            if ($pair === '') {
+                continue;
+            }
+            $kv = preg_split('/\s+/', $pair, 2);
+            if (count($kv) === 2 && preg_match('/^[a-zA-Z][a-zA-Z0-9_.-]*$/', $kv[0])) {
+                $out[$kv[0]] = $kv[1];
+            }
+        }
+        return $out;
+    }
+
+    /** HEAD offset info; throws on unknown/closed. */
+    public function tusOffset(string $uploadId): array
+    {
+        $up = $this->store->getUpload($uploadId);
+        if ($up === null || $up['status'] !== 'open') {
+            throw new \RuntimeException('unknown or closed upload');
+        }
+        return ['offset' => (int) $up['received'], 'length' => (int) $up['expected']];
+    }
+
+    /** PATCH with strict offset match (409 on mismatch → client re-HEADs). */
+    public function tusAppend(string $uploadId, int $offset, string $bytes): array
+    {
+        $cur = $this->tusOffset($uploadId);
+        if ($offset !== $cur['offset']) {
+            throw new \RuntimeException("offset mismatch: have {$cur['offset']}, got {$offset}");
+        }
+        return $this->append($uploadId, $bytes);
+    }
+
+    public function tusTerminate(string $uploadId): void
+    {
+        $staging = $this->store->stagingPath($uploadId);
+        if (is_file($staging)) {
+            unlink($staging);
+        }
+        $this->store->deleteUpload($uploadId);
+    }
+
+    /**
+     * Quarantine worker (closes R1): stream every unscanned asset to a temp
+     * file in 1 MiB slices, scan, quarantine on hit. @return array{scanned,quarantined}
+     */
+    public function quarantineUnscanned(callable $driverFor, callable $scanner, string $tmpDir, int $limit = 50): array
+    {
+        $done = 0;
+        $bad = 0;
+        foreach ($this->store->unscannedAssets($limit) as $asset) {
+            $driver = $driverFor($asset['tier']);
+            $tmp = $tmpDir . '/q-' . bin2hex(random_bytes(8)) . '.bin';
+            try {
+                $fh = fopen($tmp, 'wb');
+                $size = $driver->size($asset['storage_key']);
+                for ($off = 0; $off < $size; $off += 1048576) {
+                    fwrite($fh, $driver->readRange($asset['storage_key'], $off, min(1048576, $size - $off)));
+                }
+                fclose($fh);
+                $virus = $scanner($tmp);
+            } finally {
+                if (is_file($tmp)) {
+                    unlink($tmp);
+                }
+            }
+            if ($virus !== null) {
+                foreach ($this->store->sharesForAsset($asset['id']) as $share) {
+                    $this->deleteShareBlob($share['id'], $driverFor);
+                }
+                $this->store->deleteAsset($asset['id']);
+                $bad++;
+                continue;
+            }
+            $this->store->markScanned($asset['id']);
+            $done++;
+        }
+        return ['scanned' => $done, 'quarantined' => $bad];
+    }
+
+    /** Per-user GDPR manifest (authenticated). */
+    public function exportUser(string $userId): array
+    {
+        $assets = $this->store->assetsFor($userId);
+        $log = [];
+        foreach ($assets as $a) {
+            if ($a['share_id'] !== null) {
+                foreach ($this->store->accessLogFor($a['share_id']) as $entry) {
+                    $log[] = $entry + ['share_id' => $a['share_id']];
+                }
+            }
+        }
+        return ['assets' => $assets, 'accessLog' => $log,
+            'retention' => 'expired/revoked shares are purged nightly (bytes <24h, rows with them)'];
+    }
+
+    /** Account erasure: delete all owned blobs, then cascade rows. Returns deleted share count. */
+    public function deleteUserAccount(string $userId, callable $driverFor): int
+    {
+        $n = 0;
+        foreach ($this->store->deleteUserCascade($userId) as $blob) {
+            try {
+                $driverFor($blob['tier'])->delete($blob['storage_key']);
+            } catch (\Throwable) {
+            }
+            $n++;
+        }
+        return $n;
     }
 
     private function resolveMime(string $path, string $declared): string

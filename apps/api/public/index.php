@@ -107,6 +107,50 @@ if ($method === 'GET' && $path === '/v1/tiers') {
     return;
 }
 
+/** Authenticated user row or null (Bearer pwf_…). */
+$me = static function () use ($svc): ?array {
+    return $svc->userFromToken(Drivers::bearer());
+};
+
+if ($method === 'POST' && $path === '/v1/auth/register') {
+    if (!$gate('auth', 10, 3600)) {
+        return;
+    }
+    $body = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
+    try {
+        $json($svc->register((string) ($body['email'] ?? ''), (string) ($body['password'] ?? ''),
+            Drivers::defaultQuota()), 201);
+    } catch (\InvalidArgumentException $e) {
+        $json(['error' => $e->getMessage()], 422);
+    } catch (\RuntimeException $e) {
+        $json(['error' => $e->getMessage()], 409);
+    }
+    return;
+}
+
+if ($method === 'POST' && $path === '/v1/auth/login') {
+    if (!$gate('login', 5, 60)) {
+        return;
+    }
+    $body = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
+    try {
+        $json($svc->login((string) ($body['email'] ?? ''), (string) ($body['password'] ?? ''),
+            (string) ($body['name'] ?? 'api')));
+    } catch (\RuntimeException $e) {
+        $json(['error' => 'invalid credentials'], 401); // generic: no enumeration
+    }
+    return;
+}
+
+if ($method === 'POST' && $path === '/v1/auth/logout') {
+    $bearer = Drivers::bearer();
+    if ($bearer !== null) {
+        $store->revokeToken(hash('sha256', $bearer));
+    }
+    $json(['ok' => true]);
+    return;
+}
+
 // Reserve an upload. L1 real mode also returns a SigV4 presigned PUT for browser-direct.
 if ($method === 'POST' && $path === '/v1/uploads/init') {
     if (!$gate('init', 30, 3600)) {
@@ -114,11 +158,16 @@ if ($method === 'POST' && $path === '/v1/uploads/init') {
     }
     $body = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
     try {
+        $owner = $me();
         $r = $svc->reserve(
             (string) ($body['tier'] ?? ''), (string) ($body['filename'] ?? ''),
-            (int) ($body['size'] ?? 0), (string) ($body['mime'] ?? 'application/octet-stream'));
+            (int) ($body['size'] ?? 0), (string) ($body['mime'] ?? 'application/octet-stream'),
+            $owner['id'] ?? null, $owner !== null ? (int) $owner['quota_bytes'] : null);
     } catch (\InvalidArgumentException $e) {
         $json(['error' => $e->getMessage()], 422);
+        return;
+    } catch (\RuntimeException $e) {
+        $json(['error' => $e->getMessage()], 413);
         return;
     }
     $res = [
@@ -198,12 +247,13 @@ if ($method === 'POST' && $path === '/v1/uploads/l1-complete') {
     $r2 = Drivers::forTier('L1');
     assert($r2 instanceof R2S3Driver);
     try {
+        $owner = $me();
         $json($svc->completeL1($key, (string) ($body['filename'] ?? ''), (int) ($body['size'] ?? 0),
             (string) ($body['mime'] ?? 'application/octet-stream'), $r2, [
                 'password' => $body['password'] ?? null,
                 'maxViews' => $body['maxViews'] ?? null,
                 'burn' => $body['burn'] ?? false,
-            ]), 201);
+            ], $owner['id'] ?? null), 201);
     } catch (\InvalidArgumentException $e) {
         $json(['error' => $e->getMessage()], 422);
     } catch (\RuntimeException $e) {
@@ -383,6 +433,164 @@ if ($method === 'GET' && preg_match('#^/s/([0-9A-Za-z]{8,32})$#', $path, $m)) {
     $ttl = $isL1Real ? 300 : 900;
     header('Location: ' . $driver->signedGetUrl($row['storage_key'], $ttl), true, 302);
     return;
+}
+
+// Authenticated asset list.
+if ($method === 'GET' && $path === '/v1/me/assets') {
+    $owner = $me();
+    if ($owner === null) {
+        $json(['error' => 'unauthorized'], 401);
+        return;
+    }
+    $assets = $store->assetsFor($owner['id']);
+    foreach ($assets as &$a) {
+        $a['expiresAt'] = $a['expires_at'] !== null ? gmdate('c', (int) $a['expires_at']) : null;
+        unset($a['expires_at']);
+    }
+    $json(['assets' => $assets, 'usage' => $store->userUsage($owner['id']), 'quota' => (int) $owner['quota_bytes']]);
+    return;
+}
+
+// Per-user GDPR export: JSON manifest or real ZIP of owned bytes.
+if ($method === 'GET' && $path === '/v1/me/export') {
+    $owner = $me();
+    if ($owner === null) {
+        $json(['error' => 'unauthorized'], 401);
+        return;
+    }
+    if (($_GET['format'] ?? 'json') === 'zip') {
+        $zipPath = sys_get_temp_dir() . '/pwf-export-' . bin2hex(random_bytes(8)) . '.zip';
+        $zip = new ZipArchive();
+        $zip->open($zipPath, ZipArchive::CREATE);
+        $manifest = $svc->exportUser($owner['id']);
+        $zip->addFromString('manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
+        foreach ($store->assetsFor($owner['id']) as $a) {
+            $tmp = sys_get_temp_dir() . '/pwf-exp-' . bin2hex(random_bytes(8)) . '.bin';
+            $fh = fopen($tmp, 'wb');
+            $driver = Drivers::forTier($a['tier']);
+            for ($off = 0; $off < $a['size']; $off += 1048576) {
+                fwrite($fh, $driver->readRange($a['storage_key'], $off, min(1048576, $a['size'] - $off)));
+            }
+            fclose($fh);
+            $zip->addFile($tmp, 'files/' . $a['id'] . '-' . Shares::safeBasename($a['filename']));
+            // ZipArchive reads at close(); track temps via manifest files list.
+            $tmps[] = $tmp;
+        }
+        $zip->close();
+        foreach ($tmps ?? [] as $t) {
+            unlink($t);
+        }
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="privatewf-export.zip"');
+        header('Content-Length: ' . filesize($zipPath));
+        readfile($zipPath);
+        unlink($zipPath);
+        return;
+    }
+    $json($svc->exportUser($owner['id']) + ['usage' => $store->userUsage($owner['id'])]);
+    return;
+}
+
+// Account erasure: password-confirmed cascade (blobs + rows + tokens + user).
+if ($method === 'DELETE' && $path === '/v1/me') {
+    $owner = $me();
+    if ($owner === null) {
+        $json(['error' => 'unauthorized'], 401);
+        return;
+    }
+    $body = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
+    $user = $store->findUserByEmail($owner['email']);
+    if (!password_verify((string) ($body['password'] ?? ''), $user['pw_hash'] ?? '')) {
+        $json(['error' => 'invalid credentials'], 401);
+        return;
+    }
+    $n = $svc->deleteUserAccount($owner['id'], static fn (string $t) => Drivers::forTier($t));
+    $json(['deletedShares' => $n, 'account' => 'deleted']);
+    return;
+}
+
+// tus 1.0.0 resumable subset (L2/L3 + staged L1). Creation advertises Location.
+if ($method === 'OPTIONS') {
+    header('Tus-Version: 1.0.0');
+    header('Tus-Extension: creation,termination');
+    header('Tus-Max-Size: ' . Shares::MAX_FILE_BYTES);
+    http_response_code(204);
+    return;
+}
+
+$tusVersion = static function () use ($json): bool {
+    if (($_SERVER['HTTP_TUS_RESUMABLE'] ?? '') !== '1.0.0') {
+        $json(['error' => 'Tus-Resumable: 1.0.0 required'], 412);
+        return false;
+    }
+    return true;
+};
+
+if ($method === 'POST' && $path === '/v1/uploads/tus') {
+    if (!$tusVersion() || !$gate('init', 30, 3600)) {
+        return;
+    }
+    $tier = in_array($_GET['tier'] ?? 'L2', ['L1', 'L2', 'L3'], true) ? $_GET['tier'] : 'L2';
+    $length = (int) ($_SERVER['HTTP_UPLOAD_LENGTH'] ?? 0);
+    try {
+        $owner = $me();
+        $r = $svc->tusCreate($tier, $length, (string) ($_SERVER['HTTP_UPLOAD_METADATA'] ?? ''),
+            $owner['id'] ?? null, $owner !== null ? (int) $owner['quota_bytes'] : null);
+    } catch (\InvalidArgumentException $e) {
+        $json(['error' => $e->getMessage()], 422);
+        return;
+    } catch (\RuntimeException $e) {
+        $json(['error' => $e->getMessage()], 413);
+        return;
+    }
+    header('Tus-Resumable: 1.0.0');
+    header('Location: ' . Drivers::appUrl() . '/v1/uploads/tus/' . $r['uploadId']);
+    http_response_code(201);
+    return;
+}
+
+if (preg_match('#^/v1/uploads/tus/(up_[0-9A-Za-z]{8,32})$#', $path, $m)) {
+    if (!$tusVersion()) {
+        return;
+    }
+    header('Tus-Resumable: 1.0.0');
+    if ($method === 'HEAD') {
+        try {
+            $cur = $svc->tusOffset($m[1]);
+        } catch (\RuntimeException) {
+            $json(['error' => 'unknown upload'], 404);
+            return;
+        }
+        header('Upload-Offset: ' . $cur['offset']);
+        header('Upload-Length: ' . $cur['length']);
+        header('Cache-Control: no-store');
+        return;
+    }
+    if ($method === 'PATCH') {
+        if (!$gate('append', 600, 3600)) {
+            return;
+        }
+        if (($_SERVER['CONTENT_TYPE'] ?? '') !== 'application/offset+octet-stream') {
+            $json(['error' => 'Content-Type must be application/offset+octet-stream'], 415);
+            return;
+        }
+        try {
+            $r = $svc->tusAppend($m[1], (int) ($_SERVER['HTTP_UPLOAD_OFFSET'] ?? -1),
+                file_get_contents('php://input') ?: '');
+        } catch (\RuntimeException $e) {
+            $code = str_contains($e->getMessage(), 'mismatch') ? 409 : (str_contains($e->getMessage(), 'exceeds') ? 413 : 404);
+            $json(['error' => $e->getMessage()], $code);
+            return;
+        }
+        header('Upload-Offset: ' . $r['received']);
+        http_response_code(204);
+        return;
+    }
+    if ($method === 'DELETE') {
+        $svc->tusTerminate($m[1]);
+        http_response_code(204);
+        return;
+    }
 }
 
 $json(['error' => 'not found', 'see' => 'GET /health, GET /v1/tiers'], 404);

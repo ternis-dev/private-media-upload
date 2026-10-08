@@ -70,6 +70,13 @@ final class Store
             CREATE INDEX IF NOT EXISTS idx_access_share ON access_log(share_id);
             CREATE TABLE IF NOT EXISTS ratelimits(
               key TEXT PRIMARY KEY, count INTEGER NOT NULL, window_start INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS users(
+              id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, pw_hash TEXT NOT NULL,
+              quota_bytes INTEGER NOT NULL, created_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS tokens(
+              token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+              name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used INTEGER NULL);
+            CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
             SQL);
         // M2a columns on pre-existing DBs.
         foreach ([
@@ -82,6 +89,17 @@ final class Store
                 $pdo->exec("ALTER TABLE shares ADD COLUMN {$col} {$ddl}");
             }
         }
+        // M2b columns.
+        foreach (['uploads' => ['owner_id' => 'TEXT NULL'],
+                  'assets' => ['owner_id' => 'TEXT NULL', 'scanned' => 'INTEGER NOT NULL DEFAULT 0'],
+        ] as $table => $cols) {
+            $existing = $pdo->query("PRAGMA table_info({$table})")->fetchAll(PDO::FETCH_COLUMN, 1);
+            foreach ($cols as $col => $ddl) {
+                if (!in_array($col, $existing, true)) {
+                    $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$col} {$ddl}");
+                }
+            }
+        }
     }
 
     public function stagingPath(string $uploadId): string
@@ -92,12 +110,12 @@ final class Store
         return $this->varDir . '/staging/' . $uploadId . '.part';
     }
 
-    public function reserveUpload(array $row): void
+    public function reserveUpload(array $row, ?string $ownerId = null): void
     {
         $st = $this->pdo->prepare(
-            'INSERT INTO uploads(id,tier,filename,mime,expected,received,storage_key,status,created_at)
-             VALUES(:id,:tier,:filename,:mime,:expected,0,:storage_key,\'open\',:now)');
-        $st->execute($row);
+            'INSERT INTO uploads(id,tier,filename,mime,expected,received,storage_key,status,created_at,owner_id)
+             VALUES(:id,:tier,:filename,:mime,:expected,0,:storage_key,\'open\',:now,:owner)');
+        $st->execute($row + ['owner' => $ownerId]);
     }
 
     public function getUpload(string $id): ?array
@@ -140,12 +158,12 @@ final class Store
         $st->execute(['id' => $id]);
     }
 
-    public function createAsset(array $row): void
+    public function createAsset(array $row, ?string $ownerId = null, int $scanned = 0): void
     {
         $st = $this->pdo->prepare(
-            'INSERT INTO assets(id,tier,storage_key,size,sha256,mime,filename,created_at)
-             VALUES(:id,:tier,:storage_key,:size,:sha256,:mime,:filename,:now)');
-        $st->execute($row);
+            'INSERT INTO assets(id,tier,storage_key,size,sha256,mime,filename,created_at,owner_id,scanned)
+             VALUES(:id,:tier,:storage_key,:size,:sha256,:mime,:filename,:now,:owner,:scanned)');
+        $st->execute($row + ['owner' => $ownerId, 'scanned' => $scanned]);
     }
 
     public function createShare(array $row): void
@@ -160,7 +178,7 @@ final class Store
     public function getShare(string $id): ?array
     {
         $st = $this->pdo->prepare(
-            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename
+            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned
              FROM shares s JOIN assets a ON a.id=s.asset_id WHERE s.id=:id');
         $st->execute(['id' => $id]);
         $row = $st->fetch();
@@ -171,7 +189,7 @@ final class Store
     public function getShareByKey(string $storageKey): ?array
     {
         $st = $this->pdo->prepare(
-            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename
+            'SELECT s.*,a.id AS asset_id,a.storage_key,a.size,a.sha256,a.mime,a.filename,a.scanned
              FROM shares s JOIN assets a ON a.id=s.asset_id WHERE a.storage_key=:k');
         $st->execute(['k' => $storageKey]);
         $row = $st->fetch();
@@ -307,6 +325,156 @@ final class Store
             'SELECT ip_hash,ua_hash,result,at FROM access_log WHERE share_id=:s ORDER BY at ASC');
         $st->execute(['s' => $shareId]);
         return $st->fetchAll();
+    }
+
+    // ---------- M2b: accounts, ownership, quarantine ----------
+
+    public function createUser(string $id, string $email, string $pwHash, int $quotaBytes, int $now): void
+    {
+        $st = $this->pdo->prepare(
+            'INSERT INTO users(id,email,pw_hash,quota_bytes,created_at) VALUES(:id,:email,:pw,:quota,:now)');
+        try {
+            $st->execute(['id' => $id, 'email' => $email, 'pw' => $pwHash, 'quota' => $quotaBytes, 'now' => $now]);
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('email taken', 0, $e);
+        }
+    }
+
+    public function findUserByEmail(string $email): ?array
+    {
+        $st = $this->pdo->prepare('SELECT * FROM users WHERE email=:e');
+        $st->execute(['e' => $email]);
+        $row = $st->fetch();
+        return $row === false ? null : $row;
+    }
+
+    public function createToken(string $tokenHash, string $userId, string $name, int $now): void
+    {
+        $st = $this->pdo->prepare(
+            'INSERT INTO tokens(token_hash,user_id,name,created_at) VALUES(:h,:u,:n,:now)');
+        $st->execute(['h' => $tokenHash, 'u' => $userId, 'n' => $name, 'now' => $now]);
+    }
+
+    /** @return null|array{id,email,quota_bytes,token_name} */
+    public function findUserByTokenHash(string $tokenHash, int $now): ?array
+    {
+        $st = $this->pdo->prepare(
+            'SELECT u.id,u.email,u.quota_bytes,t.name AS token_name FROM tokens t
+             JOIN users u ON u.id=t.user_id WHERE t.token_hash=:h');
+        $st->execute(['h' => $tokenHash]);
+        $row = $st->fetch();
+        if ($row === false) {
+            return null;
+        }
+        $up = $this->pdo->prepare('UPDATE tokens SET last_used=:now WHERE token_hash=:h');
+        $up->execute(['now' => $now, 'h' => $tokenHash]);
+        return $row;
+    }
+
+    public function revokeToken(string $tokenHash): void
+    {
+        $st = $this->pdo->prepare('DELETE FROM tokens WHERE token_hash=:h');
+        $st->execute(['h' => $tokenHash]);
+    }
+
+    public function revokeUserTokens(string $userId): void
+    {
+        $st = $this->pdo->prepare('DELETE FROM tokens WHERE user_id=:u');
+        $st->execute(['u' => $userId]);
+    }
+
+    /** Bytes owned: stored assets + open staging reservations. */
+    public function userUsage(string $userId): int
+    {
+        $st = $this->pdo->prepare('SELECT COALESCE(SUM(size),0) FROM assets WHERE owner_id=:u');
+        $st->execute(['u' => $userId]);
+        $assets = (int) $st->fetchColumn();
+        $st = $this->pdo->prepare("SELECT COALESCE(SUM(expected),0) FROM uploads WHERE owner_id=:u AND status='open'");
+        $st->execute(['u' => $userId]);
+        return $assets + (int) $st->fetchColumn();
+    }
+
+    /** @return list<array{id,filename,mime,size,created_at,tier,storage_key,share_id,expires_at}> */
+    public function assetsFor(string $userId): array
+    {
+        $st = $this->pdo->prepare(
+            'SELECT a.id,a.filename,a.mime,a.size,a.created_at,a.tier,a.storage_key,s.id AS share_id,s.expires_at
+             FROM assets a LEFT JOIN shares s ON s.asset_id=a.id
+             WHERE a.owner_id=:u ORDER BY a.created_at DESC');
+        $st->execute(['u' => $userId]);
+        return $st->fetchAll();
+    }
+
+    /** @return list<array{id,tier,storage_key,size,filename}> */
+    public function unscannedAssets(int $limit = 50): array
+    {
+        $st = $this->pdo->prepare(
+            'SELECT id,tier,storage_key,size,filename FROM assets WHERE scanned=0 ORDER BY created_at ASC LIMIT :lim');
+        $st->bindValue(':lim', $limit, PDO::PARAM_INT);
+        $st->execute();
+        return $st->fetchAll();
+    }
+
+    public function markScanned(string $assetId): void
+    {
+        $st = $this->pdo->prepare('UPDATE assets SET scanned=1 WHERE id=:id');
+        $st->execute(['id' => $assetId]);
+    }
+
+    /** @return list<array{id: string}> shares pointing at an asset */
+    public function sharesForAsset(string $assetId): array
+    {
+        $st = $this->pdo->prepare('SELECT id FROM shares WHERE asset_id=:a');
+        $st->execute(['a' => $assetId]);
+        return $st->fetchAll();
+    }
+
+    /**
+     * Full account erasure: returns share ids whose blobs the caller must
+     * delete, then drops tokens, assets, shares, staging rows and the user.
+     *
+     * @return list<array{id: string, tier: string, storage_key: string}>
+     */
+    public function deleteUserCascade(string $userId): array
+    {
+        $st = $this->pdo->prepare(
+            'SELECT s.id,a.tier,a.storage_key FROM assets a LEFT JOIN shares s ON s.asset_id=a.id
+             WHERE a.owner_id=:u');
+        $st->execute(['u' => $userId]);
+        $blobs = $st->fetchAll();
+        $this->pdo->beginTransaction();
+        try {
+            foreach (['tokens' => 'user_id', 'shares' => null, 'assets' => 'owner_id'] as $table => $col) {
+                if ($table === 'shares') {
+                    $this->pdo->prepare(
+                        'DELETE FROM shares WHERE asset_id IN (SELECT id FROM assets WHERE owner_id=:u)')
+                        ->execute(['u' => $userId]);
+                } else {
+                    $this->pdo->prepare("DELETE FROM {$table} WHERE {$col}=:u")->execute(['u' => $userId]);
+                }
+            }
+            $this->pdo->prepare("DELETE FROM uploads WHERE owner_id=:u")->execute(['u' => $userId]);
+            $this->pdo->prepare('DELETE FROM users WHERE id=:u')->execute(['u' => $userId]);
+            $this->pdo->commit();
+            return array_values(array_filter($blobs, static fn ($b) => $b['id'] !== null));
+        } catch (\Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public function deleteUpload(string $uploadId): void
+    {
+        $st = $this->pdo->prepare('DELETE FROM uploads WHERE id=:id');
+        $st->execute(['id' => $uploadId]);
+    }
+
+    public function deleteAsset(string $assetId): void
+    {
+        $st = $this->pdo->prepare('DELETE FROM assets WHERE id=:id');
+        $st->execute(['id' => $assetId]);
     }
 
     /** Test helper: force expiry. */

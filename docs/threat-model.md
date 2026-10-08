@@ -12,6 +12,7 @@ Scope: lean-PHP M1/M2a stack (SQLite, no accounts yet). Updated per milestone; L
 | A5 | Abuser (CSAM/extremism) | shares illegal content | Reporting flow M3; hashes (PhotoDNA-style) explicitly non-goal v1 |
 | A6 | Passive network observer | taps traffic | No — TLS terminates at edge (infra); HMAC/SigV4 URLs expire (15 min / 5 min L1-real) |
 | A7 | Forensic analyst (deleted data) | seizes disks post-purge | Purge deletes bytes + rows; SQLite WAL/VACUUM caveat (R2) |
+| A8 | Credential stuffer | password-sprays login/register | No — login 5/min/IP + generic errors (no enumeration), argon2id, min-12 account passwords |
 
 ## Controls (implemented → test)
 - Unguessable ids: `Shares::newId` (CSPRNG, 62^12) — `SharesTest`, live 404-rate proof.
@@ -24,8 +25,13 @@ Scope: lean-PHP M1/M2a stack (SQLite, no accounts yet). Updated per milestone; L
 - Upload validation: 5 GB cap, overflow reject, traversal reject, mime sniff recorded.
 
 ## Accepted risks
-- **R1 (open):** direct-to-R2 uploads skip inline AV scan (bytes never touch PHP). Mitigation M2b: S3 event → quarantine worker. L2/L3 staged path IS scanned.
+- **R1 (CLOSED M2b):** direct-to-R2 uploads skipped inline AV — now covered by the
+  hourly quarantine worker (`bin/quarantine.php`: streams unscanned assets via
+  readRange, scans, deletes shares+bytes on hit). Residual R6: detection latency
+  ≤ worker interval; staged L2/L3 path still scans inline at complete().
 - **R2 (open):** SQLite `VACUUM`/`WAL` may retain deleted bytes on disk; pgsql + `VACUUM` policy with Laravel (M2b). LUKS at rest recommended (infra runbook M4).
 - **R3 (accepted):** L1-real single-use links: issued SigV4 URL valid for its 5-min TTL even after revoke. Mitigated by short TTL; strict burn → use L2/L3 proxy.
-- **R4 (accepted):** no accounts yet → capability URLs are the auth; 71-bit + rate limits is the bar (documented, revisited with accounts M2b).
+- **R4 (retired M2b for owned shares):** capability-only auth supplemented by
+  accounts: owned shares manageable + erasable per-user; anonymous shares keep
+  the 71-bit + rate-limit bar (documented until accounts become mandatory).
 - **R5 (accepted):** `?password=` query fallback leaks into access logs/proxies — header preferred, web client uses header; query kept for curl ergonomics.

@@ -17,10 +17,10 @@ _Art. 17 DSGVO / Datenminimierung (Art. 5). German entity; data residency: L2/L3
 - Burn / max-views → bytes + rows deleted **on final read**.
 - Backups: no backups in M2a dev; M4 runbook defines backup encryption + retention (backups must honor erasure: restore-then-purge procedure).
 
-## Betroffenenrechte (pre-account stage, capability-based)
-- **Auskunft/Export:** `GET /v1/shares/:id/export` (id + password) returns metadata + access log + retention note.
-- **Löschung:** `DELETE /v1/shares/:id` (id + password) — immediate byte deletion.
-- With accounts (M2b): per-user export (ZIP + JSON manifest) + account deletion cascading to all shares.
+## Betroffenenrechte (accounts since M2b, capability fallback)
+- **Auskunft/Export:** `GET /v1/me/export` (JSON manifest or real ZIP of owned bytes) + per-share `GET /v1/shares/:id/export` (id + password).
+- **Löschung:** `DELETE /v1/me` (password-confirmed: blobs + rows + tokens + user, immediate) + per-share `DELETE /v1/shares/:id`.
+- Quotas are visible (`GET /v1/me/assets` → usage/quota); over-quota reserves fail closed (413).
 
 ## TOMs (technical-organisational measures, current)
 TLS in transit · SSE/LUKS at rest (infra-dependent, runbook M4) · argon2id passwords · short-lived signed URLs · append-only audit · least-privilege DB file perms (0600 var/, 0700 vault) · no third-country transfer for L2/L3.

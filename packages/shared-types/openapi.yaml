@@ -1,11 +1,62 @@
 openapi: 3.0.3
 info:
   title: private.wf API
-  version: 0.2.0-M2a
-  description: M2a: share security (argon2id password, max-views/burn, revoke), rate limits (429), audit-backed GDPR export, ClamAV hook, real SFTP L2.
+  version: 0.3.0-M2b
+  description: M2b: accounts (register/login/Bearer), ownership + quotas, tus 1.0.0 subset, quarantine worker, per-user GDPR ZIP/cascade.
 servers:
   - url: http://localhost:8000
 paths:
+  /v1/auth/register:
+    post:
+      summary: Register (email, account password 12..256). Returns user id.
+      responses:
+        '201': { description: '{id}' }
+        '409': { description: email taken }
+        '422': { description: validation error }
+  /v1/auth/login:
+    post:
+      summary: Login → Bearer token (generic 401, no enumeration; 5/min/IP)
+      responses:
+        '200': { description: '{token}' }
+        '401': { description: invalid credentials }
+  /v1/auth/logout:
+    post:
+      summary: Revoke current Bearer token
+      responses:
+        '200': { description: '{ok: true}' }
+  /v1/me/assets:
+    get:
+      summary: Owned assets + usage/quota (Bearer)
+      responses:
+        '200': { description: '{assets, usage, quota}' }
+        '401': { description: unauthorized }
+  /v1/me/export:
+    get:
+      summary: Per-user GDPR manifest (json) or real ZIP of owned bytes (?format=zip)
+      responses:
+        '200': { description: manifest or ZIP }
+        '401': { description: unauthorized }
+  /v1/me:
+    delete:
+      summary: Password-confirmed account erasure (blobs + rows + tokens + user)
+      responses:
+        '200': { description: '{deletedShares, account: deleted}' }
+        '401': { description: unauthorized / invalid credentials }
+  /v1/uploads/tus:
+    post:
+      summary: tus 1.0.0 Creation (?tier=, Upload-Length + Upload-Metadata filename required) → 201 + Location
+      responses:
+        '201': { description: empty, Location header }
+        '412': { description: Tus-Resumable missing }
+        '413': { description: quota exceeded }
+        '422': { description: bad length/metadata }
+  /v1/uploads/tus/{uploadId}:
+    head:
+      summary: tus offset discovery (Upload-Offset + Upload-Length)
+    patch:
+      summary: tus append (strict Upload-Offset, 409 on mismatch) → 204 + Upload-Offset
+    delete:
+      summary: tus termination (drops staging + reservation) → 204
   /health:
     get:
       summary: Liveness

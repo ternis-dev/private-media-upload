@@ -16,14 +16,14 @@
 - [x] `packages/shared-types/openapi.yaml` v0.1.0-M1
 - DoD: upload 100 MB → share → expiry → bytes gone (covered by test). ✅ proven 2026-10-08
 
-## M2 — split: M2a hardening ✅ DONE / M2b Laravel + async workers (next)
-- [x] Real SFTP L2 driver (phpseclib, env-gated live test in CI; emulation fallback)
-- [x] Share security: argon2id passwords, max-views (atomic), burn-after-read (live 200→404 proof), revoke-now + purge sweep
-- [x] Rate limits (SQLite fixed-window, live 429 proof) + PII-minimized audit log + capability GDPR export/delete
-- [x] ClamAV INSTREAM hook on staged path (skippable dev default; direct-to-R2 gap R1 tracked)
-- [x] `docs/threat-model.md`, `docs/gdpr/loeschkonzept.md`, `docs/adr/0003-share-security.md`, openapi 0.2.0-M2a
-- [ ] M2b: Laravel 12/13 migration (port Store/UploadService/Drivers → pgsql + Horizon), S3-event AV quarantine worker (closes R1), Redis throttle, accounts + per-user GDPR cascade, tus proxy
-- DoD: pentest checklist pass (guess-rate, headers, purge <24h). — partial: automated proofs green (429/401/410/200→404, purge<24h by cron); full checklist with auth in M2b
+## M2 — split: M2a hardening ✅ / M2b ownership ✅ / M3a Laravel port + M3b E2EE (next)
+- M2a: see previous entry (passwords/views/burn/revoke, rate limits, audit, ClamAV hook, real SFTP, GDPR docs).
+- [x] M2b accounts: register/login (argon2id min-12, generic 401, 5/min gate), `pwf_` Bearer tokens (sha256 at rest), per-user quota (413 fail-closed), dashboard, JSON+ZIP export, password-confirmed cascade erasure (live proof: vault empty, token dead)
+- [x] tus 1.0.0 subset (creation/HEAD/PATCH-strict-offset/termination, 409 resume, quota-aware) — live curl proof
+- [x] Quarantine worker `bin/quarantine.php` closes R1 (streams unscanned assets via readRange, deletes shares+bytes on hit; skips cleanly w/o daemon; EICAR CI job non-blocking)
+- [x] ADR-0004 (domain-before-framework), threat-model A8/R1-closed/R4-retired, Löschkonzept account cascade, openapi 0.3.0-M2b
+- [ ] M3a: Laravel 12/13 port (spec = this codebase: Eloquent mirrors schema, controllers wrap UploadService, Sanctum/OIDC, Horizon purge+quarantine, Redis throttle)
+- [ ] M3b: browser AES-GCM E2EE (key in #fragment), thumbnails, abuse-report flow
 
 ## M3 — E2EE + polish
 - Browser AES-GCM E2EE (key in `#fragment`), server-blind test.
