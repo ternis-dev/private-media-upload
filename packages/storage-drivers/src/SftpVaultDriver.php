@@ -44,16 +44,16 @@ final class SftpVaultDriver implements StorageDriverInterface
     public static function fromEnv(): self
     {
         return new self(
-            emulationRoot: getenv('SFTP_L2_EMU_ROOT') ?: sys_get_temp_dir() . '/pwf-l2-emu',
-            baseUrl: getenv('APP_URL') ?: 'http://localhost:8000',
-            hmacSecret: getenv('HMAC_SECRET') ?: 'changeme-sovereign',
-            host: getenv('SFTP_L2_HOST') ?: '',
-            port: (int) (getenv('SFTP_L2_PORT') ?: 22),
-            user: getenv('SFTP_L2_USER') ?: '',
-            password: getenv('SFTP_L2_PASSWORD') ?: '',
-            keyFile: getenv('SFTP_L2_KEY_FILE') ?: '',
-            keyPassphrase: getenv('SFTP_L2_KEY_PASSPHRASE') ?: '',
-            root: getenv('SFTP_L2_ROOT') ?: '/vault',
+            emulationRoot: Env::get('SFTP_L2_EMU_ROOT') ?: sys_get_temp_dir() . '/pwf-l2-emu',
+            baseUrl: Env::get('APP_URL') ?: 'http://localhost:8000',
+            hmacSecret: Env::get('HMAC_SECRET') ?: 'changeme-sovereign',
+            host: Env::get('SFTP_L2_HOST') ?: '',
+            port: (int) (Env::get('SFTP_L2_PORT') ?: 22),
+            user: Env::get('SFTP_L2_USER') ?: '',
+            password: Env::get('SFTP_L2_PASSWORD') ?: '',
+            keyFile: Env::get('SFTP_L2_KEY_FILE') ?: '',
+            keyPassphrase: Env::get('SFTP_L2_KEY_PASSPHRASE') ?: '',
+            root: Env::get('SFTP_L2_ROOT') ?: '/vault',
         );
     }
 

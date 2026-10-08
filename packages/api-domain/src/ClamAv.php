@@ -18,7 +18,7 @@ final class ClamAv
 
     public static function fromEnv(): self
     {
-        return new self(getenv('CLAMAV_HOST') ?: '', (int) (getenv('CLAMAV_PORT') ?: 3310));
+        return new self(Env::get('CLAMAV_HOST') ?: '', (int) (Env::get('CLAMAV_PORT') ?: 3310));
     }
 
     public function enabled(): bool

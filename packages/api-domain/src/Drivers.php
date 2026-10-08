@@ -14,27 +14,27 @@ final class Drivers
 {
     public static function appUrl(): string
     {
-        return getenv('APP_URL') ?: 'http://localhost:8000';
+        return Env::get('APP_URL') ?: 'http://localhost:8000';
     }
 
     public static function webUrl(): string
     {
-        return getenv('WEB_URL') ?: 'http://localhost:3000';
+        return Env::get('WEB_URL') ?: 'http://localhost:3000';
     }
 
     public static function hmacSecret(): string
     {
-        return getenv('HMAC_SECRET') ?: 'changeme-sovereign';
+        return Env::get('HMAC_SECRET') ?: 'changeme-sovereign';
     }
 
     public static function varDir(): string
     {
-        return getenv('VAR_DIR') ?: __DIR__ . '/../var';
+        return Store::varDir();
     }
 
     public static function dbPath(): string
     {
-        return getenv('DB_PATH') ?: self::varDir() . '/privatewf.sqlite';
+        return Env::get('DB_PATH') ?: self::varDir() . '/privatewf.sqlite';
     }
 
     public static function forTier(string $tier): StorageDriverInterface
@@ -43,7 +43,7 @@ final class Drivers
             'L1' => R2S3Driver::fromEnv(),
             'L2' => SftpVaultDriver::fromEnv(),
             'L3' => new LocalSovereignDriver(
-                getenv('SOVEREIGN_PATH') ?: sys_get_temp_dir() . '/pwf-sovereign',
+                Env::get('SOVEREIGN_PATH') ?: sys_get_temp_dir() . '/pwf-sovereign',
                 self::appUrl(), self::hmacSecret()),
             default => throw new \InvalidArgumentException('unknown tier'),
         };
@@ -51,13 +51,13 @@ final class Drivers
 
     public static function auditSalt(): string
     {
-        return getenv('AUDIT_SALT') ?: self::hmacSecret();
+        return Env::get('AUDIT_SALT') ?: self::hmacSecret();
     }
 
     /** Default per-user quota (bytes). */
     public static function defaultQuota(): int
     {
-        return (int) (getenv('USER_QUOTA_BYTES') ?: 10 * 1024 * 1024 * 1024);
+        return (int) (Env::get('USER_QUOTA_BYTES') ?: 10 * 1024 * 1024 * 1024);
     }
 
     /** Bearer token from Authorization header. */

@@ -1,27 +1,89 @@
 {
-  "name": "ternis/private-wf-api",
-  "description": "private.wf API (M1 lean PHP; Laravel migration M2+ per ADR-0001)",
-  "license": "AGPL-3.0-or-later",
-  "type": "project",
-  "repositories": [
-    { "type": "path", "url": "../../packages/storage-drivers", "options": { "symlink": true } }
-  ],
-  "require": {
-    "php": "^8.3",
-    "ternis/storage-drivers": "@dev"
-  },
-  "require-dev": {
-    "phpunit/phpunit": "^11.0"
-  },
-  "autoload": {
-    "psr-4": { "PrivateWf\\Api\\": "src/" }
-  },
-  "autoload-dev": {
-    "psr-4": { "PrivateWf\\Api\\Tests\\": "tests/" }
-  },
-  "scripts": {
-    "test": "phpunit --colors=always",
-    "serve": "php -S localhost:8000 -t public",
-    "purge": "php bin/purge.php"
-  }
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "ternis/private-wf-api",
+    "type": "project",
+    "description": "private.wf API — Laravel 12 HTTP layer over the framework-free domain (packages/api-domain).",
+    "keywords": ["private", "media", "sharing", "gdpr"],
+    "license": "AGPL-3.0-or-later",
+    "repositories": [
+        { "type": "path", "url": "../../packages/api-domain", "options": { "symlink": true } }
+    ],
+    "require": {
+        "php": "^8.2",
+        "laravel/framework": "^12.0",
+        "laravel/tinker": "^2.10.1",
+        "ternis/api-domain": "@dev"
+    },
+    "require-dev": {
+        "fakerphp/faker": "^1.23",
+        "laravel/pail": "^1.2.2",
+        "laravel/pint": "^1.24",
+        "laravel/sail": "^1.41",
+        "mockery/mockery": "^1.6",
+        "nunomaduro/collision": "^8.6",
+        "phpunit/phpunit": "^11.5.50"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "app/",
+            "Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "setup": [
+            "composer install",
+            "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
+            "@php artisan key:generate",
+            "@php artisan migrate --force",
+            "npm install",
+            "npm run build"
+        ],
+        "dev": [
+            "Composer\\Config::disableProcessTimeout",
+            "npx concurrently -c \"#93c5fd,#c4b5fd,#fb7185,#fdba74\" \"php artisan serve\" \"php artisan queue:listen --tries=1 --timeout=0\" \"php artisan pail --timeout=0\" \"npm run dev\" --names=server,queue,logs,vite --kill-others"
+        ],
+        "test": [
+            "@php artisan config:clear --ansi",
+            "@php artisan test"
+        ],
+        "post-autoload-dump": [
+            "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
+            "@php artisan package:discover --ansi"
+        ],
+        "post-update-cmd": [
+            "@php artisan vendor:publish --tag=laravel-assets --ansi --force"
+        ],
+        "post-root-package-install": [
+            "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
+        ],
+        "post-create-project-cmd": [
+            "@php artisan key:generate --ansi",
+            "@php -r \"file_exists('database/database.sqlite') || touch('database/database.sqlite');\"",
+            "@php artisan migrate --graceful --ansi"
+        ],
+        "pre-package-uninstall": [
+            "Illuminate\\Foundation\\ComposerScripts::prePackageUninstall"
+        ]
+    },
+    "extra": {
+        "laravel": {
+            "dont-discover": []
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "preferred-install": "dist",
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "php-http/discovery": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
 }

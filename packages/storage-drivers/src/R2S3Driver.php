@@ -44,15 +44,15 @@ final class R2S3Driver implements StorageDriverInterface
     public static function fromEnv(): self
     {
         return new self(
-            emulationRoot: getenv('S3_L1_EMU_ROOT') ?: sys_get_temp_dir() . '/pwf-l1-emu',
-            bucket: getenv('S3_L1_BUCKET') ?: 'privatewf-l1',
-            publicBase: getenv('S3_L1_PUBLIC_BASE') ?: 'https://r2.private.wf',
-            endpoint: getenv('S3_L1_ENDPOINT') ?: '',
-            key: getenv('S3_L1_KEY') ?: '',
-            secret: getenv('S3_L1_SECRET') ?: '',
-            region: getenv('S3_L1_REGION') ?: 'auto',
-            emuBaseUrl: getenv('APP_URL') ?: 'http://localhost:8000',
-            emuSecret: getenv('HMAC_SECRET') ?: 'changeme-sovereign',
+            emulationRoot: Env::get('S3_L1_EMU_ROOT') ?: sys_get_temp_dir() . '/pwf-l1-emu',
+            bucket: Env::get('S3_L1_BUCKET') ?: 'privatewf-l1',
+            publicBase: Env::get('S3_L1_PUBLIC_BASE') ?: 'https://r2.private.wf',
+            endpoint: Env::get('S3_L1_ENDPOINT') ?: '',
+            key: Env::get('S3_L1_KEY') ?: '',
+            secret: Env::get('S3_L1_SECRET') ?: '',
+            region: Env::get('S3_L1_REGION') ?: 'auto',
+            emuBaseUrl: Env::get('APP_URL') ?: 'http://localhost:8000',
+            emuSecret: Env::get('HMAC_SECRET') ?: 'changeme-sovereign',
         );
     }
 

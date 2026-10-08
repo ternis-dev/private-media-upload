@@ -48,15 +48,4 @@ final class SharesTest extends TestCase
     {
         $this->assertGreaterThan(Shares::defaultExpiry('L1'), Shares::defaultExpiry('L3'));
     }
-
-    public function test_router_endpoints(): void
-    {
-        // Boot the built-in router via `php -S` in-process is overkill for M0;
-        // assert the router file at least parses and exposes the 4 routes.
-        $src = file_get_contents(__DIR__ . '/../public/index.php');
-        $this->assertStringContainsString('/health', $src);
-        $this->assertStringContainsString('/v1/tiers', $src);
-        $this->assertStringContainsString('/v1/uploads/init', $src);
-        $this->assertStringContainsString('X-Robots-Tag: noindex', $src);
-    }
 }

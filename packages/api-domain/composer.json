@@ -1,0 +1,27 @@
+{
+  "name": "ternis/api-domain",
+  "description": "private.wf framework-free domain: uploads, shares, auth, tus, quarantine (AGPL)",
+  "license": "AGPL-3.0-or-later",
+  "type": "library",
+  "repositories": [
+    { "type": "path", "url": "../storage-drivers", "options": { "symlink": true } }
+  ],
+  "require": {
+    "php": "^8.3",
+    "ternis/storage-drivers": "@dev"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.0"
+  },
+  "autoload": {
+    "psr-4": { "PrivateWf\\Api\\": "src/" }
+  },
+  "autoload-dev": {
+    "psr-4": { "PrivateWf\\Api\\Tests\\": "tests/" }
+  },
+  "scripts": {
+    "test": "phpunit --colors=always",
+    "purge": "php bin/purge.php",
+    "quarantine": "php bin/quarantine.php"
+  }
+}

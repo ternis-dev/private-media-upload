@@ -18,40 +18,68 @@ final class Store
     ) {
     }
 
-    public static function open(string $dbPath, string $varDir): self
+    public static function varDir(): string
+    {
+        return Env::get('VAR_DIR') ?: __DIR__ . '/../var';
+    }
+
+    /** Env-wired open: DB_DSN (pgsql) > DB_PATH=:memory: (tests) > sqlite file. */
+    public static function openFromEnv(): self
+    {
+        $varDir = self::varDir();
+        $dsn = Env::get('DB_DSN');
+        if ($dsn !== '') {
+            $pdo = new PDO($dsn, Env::get('DB_USER'), Env::get('DB_PASS'), options: [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            ]);
+            self::migrate($pdo);
+            return new self($pdo, $varDir);
+        }
+        if (Env::get('DB_PATH') === ':memory:') {
+            return self::memory($varDir . '-test-' . bin2hex(random_bytes(4)));
+        }
+        return self::open(Env::get('DB_PATH') ?: $varDir . '/privatewf.sqlite', $varDir);
+    }
+
+    /** Inject an existing PDO (tests, Laravel). Runs migrations. */
+    public static function fromPdo(\PDO $pdo, string $varDir): self
     {
         foreach ([$varDir, $varDir . '/staging'] as $dir) {
             if (!is_dir($dir)) {
                 mkdir($dir, 0700, true);
             }
         }
-        $pdo = new PDO('sqlite:' . $dbPath, options: [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        ]);
-        $pdo->exec('PRAGMA journal_mode=WAL');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
         self::migrate($pdo);
         return new self($pdo, $varDir);
+    }
+
+    public static function isPgsql(PDO $pdo): bool
+    {
+        return $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'pgsql';
+    }
+
+    public static function open(string $dbPath, string $varDir): self
+    {
+        return self::fromPdo(new PDO('sqlite:' . $dbPath), $varDir);
     }
 
     /** :memory: store for tests. */
     public static function memory(string $varDir): self
     {
-        if (!is_dir($varDir . '/staging')) {
-            mkdir($varDir . '/staging', 0700, true);
-        }
-        $pdo = new PDO('sqlite::memory:', options: [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        ]);
-        $s = new self($pdo, $varDir);
-        self::migrate($pdo);
-        return $s;
+        return self::fromPdo(new PDO('sqlite::memory:'), $varDir);
     }
 
     private static function migrate(PDO $pdo): void
     {
-        $pdo->exec(<<<'SQL'
+        $pgsql = self::isPgsql($pdo);
+        if (!$pgsql) {
+            $pdo->exec('PRAGMA journal_mode=WAL');
+        }
+        $autoId = $pgsql ? 'id SERIAL PRIMARY KEY' : 'id INTEGER PRIMARY KEY AUTOINCREMENT';
+        $pdo->exec(<<<SQL
             CREATE TABLE IF NOT EXISTS uploads(
               id TEXT PRIMARY KEY, tier TEXT NOT NULL, filename TEXT NOT NULL,
               mime TEXT NOT NULL, expected INTEGER NOT NULL, received INTEGER NOT NULL DEFAULT 0,
@@ -65,7 +93,7 @@ final class Store
               tier TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_shares_expires ON shares(expires_at);
             CREATE TABLE IF NOT EXISTS access_log(
-              id INTEGER PRIMARY KEY AUTOINCREMENT, share_id TEXT NOT NULL, ip_hash TEXT NOT NULL,
+              {$autoId}, share_id TEXT NOT NULL, ip_hash TEXT NOT NULL,
               ua_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_access_share ON access_log(share_id);
             CREATE TABLE IF NOT EXISTS ratelimits(
@@ -78,25 +106,27 @@ final class Store
               name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used INTEGER NULL);
             CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
             SQL);
-        // M2a columns on pre-existing DBs.
-        foreach ([
-            'password_hash' => 'TEXT NULL', 'max_views' => 'INTEGER NULL',
-            'views' => 'INTEGER NOT NULL DEFAULT 0', 'burn' => 'INTEGER NOT NULL DEFAULT 0',
-            'revoked_at' => 'INTEGER NULL',
-        ] as $col => $ddl) {
-            $cols = $pdo->query('PRAGMA table_info(shares)')->fetchAll(PDO::FETCH_COLUMN, 1);
-            if (!in_array($col, $cols, true)) {
-                $pdo->exec("ALTER TABLE shares ADD COLUMN {$col} {$ddl}");
+        // Columns on pre-existing DBs (both drivers).
+        $existing = static function (string $table) use ($pdo, $pgsql): array {
+            if ($pgsql) {
+                $st = $pdo->prepare(
+                    'SELECT column_name FROM information_schema.columns WHERE table_name=:t');
+                $st->execute(['t' => $table]);
+                return $st->fetchAll(PDO::FETCH_COLUMN);
             }
-        }
-        // M2b columns.
-        foreach (['uploads' => ['owner_id' => 'TEXT NULL'],
-                  'assets' => ['owner_id' => 'TEXT NULL', 'scanned' => 'INTEGER NOT NULL DEFAULT 0',
-                               'e2ee' => 'INTEGER NOT NULL DEFAULT 0'],
+            return $pdo->query("PRAGMA table_info({$table})")->fetchAll(PDO::FETCH_COLUMN, 1);
+        };
+        foreach ([
+            'shares' => ['password_hash' => 'TEXT NULL', 'max_views' => 'INTEGER NULL',
+                'views' => 'INTEGER NOT NULL DEFAULT 0', 'burn' => 'INTEGER NOT NULL DEFAULT 0',
+                'revoked_at' => 'INTEGER NULL'],
+            'uploads' => ['owner_id' => 'TEXT NULL'],
+            'assets' => ['owner_id' => 'TEXT NULL', 'scanned' => 'INTEGER NOT NULL DEFAULT 0',
+                'e2ee' => 'INTEGER NOT NULL DEFAULT 0'],
         ] as $table => $cols) {
-            $existing = $pdo->query("PRAGMA table_info({$table})")->fetchAll(PDO::FETCH_COLUMN, 1);
+            $have = $existing($table);
             foreach ($cols as $col => $ddl) {
-                if (!in_array($col, $existing, true)) {
+                if (!in_array($col, $have, true)) {
                     $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$col} {$ddl}");
                 }
             }
