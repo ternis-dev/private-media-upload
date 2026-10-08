@@ -16,13 +16,13 @@
 - [x] `packages/shared-types/openapi.yaml` v0.1.0-M1
 - DoD: upload 100 MB → share → expiry → bytes gone (covered by test). ✅ proven 2026-10-08
 
-## M2 — split: M2a hardening ✅ / M2b ownership ✅ / M3a Laravel port + M3b E2EE (next)
+## M2 — split: M2a hardening ✅ / M2b ownership ✅ / M3a Laravel port ✅ / M3b E2EE ✅
 - M2a: see previous entry (passwords/views/burn/revoke, rate limits, audit, ClamAV hook, real SFTP, GDPR docs).
 - [x] M2b accounts: register/login (argon2id min-12, generic 401, 5/min gate), `pwf_` Bearer tokens (sha256 at rest), per-user quota (413 fail-closed), dashboard, JSON+ZIP export, password-confirmed cascade erasure (live proof: vault empty, token dead)
 - [x] tus 1.0.0 subset (creation/HEAD/PATCH-strict-offset/termination, 409 resume, quota-aware) — live curl proof
 - [x] Quarantine worker `bin/quarantine.php` closes R1 (streams unscanned assets via readRange, deletes shares+bytes on hit; skips cleanly w/o daemon; EICAR CI job non-blocking)
 - [x] ADR-0004 (domain-before-framework), threat-model A8/R1-closed/R4-retired, Löschkonzept account cascade, openapi 0.3.0-M2b
-- [ ] M3a: Laravel 12/13 port (spec = this codebase: Eloquent mirrors schema, controllers wrap UploadService, Sanctum/OIDC, Horizon purge+quarantine, Redis throttle)
+- [x] M3a Laravel 12 port: thin controllers over `packages/api-domain` (no Eloquent, custom Bearer kept, scheduler workers, pgsql via DSN + migration, 14 HTTP feature tests, live 5 MB + Range proof); real bugs fixed en route (Env precedence, Store PDO-before-mkdir); ADR-0006 records deviations (no Sanctum/Horizon/Redis yet)
 - [x] M3b E2EE core: AES-256-GCM PWF1 containers (key in #fragment, server blind) — format doc, 7 crypto tests (multi-chunk, tamper/wrong-key fail-closed), server opaqueness tests, quarantine-skip, web encrypt/decrypt wired, full-loop live proof (ciphertext on disk, IDENTICAL decrypt)
 - [ ] M3c (deferred): thumbnails, abuse-report flow, E2EE streaming decrypt >1 GB
 

@@ -1,5 +1,6 @@
 <?php
 
+use App\Exceptions\ApiError;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -11,8 +12,12 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        $middleware->alias([
+            'pwf.rate' => \App\Http\Middleware\ApiRateLimit::class,
+            'pwf.bearer' => \App\Http\Middleware\OptionalBearer::class,
+            'pwf.auth' => \App\Http\Middleware\RequireBearer::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->render(fn (ApiError $e) => response()->json($e->payload, $e->getStatusCode(), $e->getHeaders()));
     })->create();

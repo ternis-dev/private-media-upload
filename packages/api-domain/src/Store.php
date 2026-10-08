@@ -45,15 +45,20 @@ final class Store
     /** Inject an existing PDO (tests, Laravel). Runs migrations. */
     public static function fromPdo(\PDO $pdo, string $varDir): self
     {
+        self::ensureDirs($varDir);
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        self::migrate($pdo);
+        return new self($pdo, $varDir);
+    }
+
+    private static function ensureDirs(string $varDir): void
+    {
         foreach ([$varDir, $varDir . '/staging'] as $dir) {
             if (!is_dir($dir)) {
                 mkdir($dir, 0700, true);
             }
         }
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
-        self::migrate($pdo);
-        return new self($pdo, $varDir);
     }
 
     public static function isPgsql(PDO $pdo): bool
@@ -63,6 +68,9 @@ final class Store
 
     public static function open(string $dbPath, string $varDir): self
     {
+        // Directories first: PDO sqlite cannot create missing parent dirs,
+        // and argument evaluation would construct PDO before fromPdo() runs.
+        self::ensureDirs($varDir);
         return self::fromPdo(new PDO('sqlite:' . $dbPath), $varDir);
     }
 

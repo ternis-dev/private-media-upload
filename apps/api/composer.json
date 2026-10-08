@@ -6,13 +6,15 @@
     "keywords": ["private", "media", "sharing", "gdpr"],
     "license": "AGPL-3.0-or-later",
     "repositories": [
-        { "type": "path", "url": "../../packages/api-domain", "options": { "symlink": true } }
+        { "type": "path", "url": "../../packages/api-domain", "options": { "symlink": true } },
+        { "type": "path", "url": "../../packages/storage-drivers", "options": { "symlink": true } }
     ],
     "require": {
         "php": "^8.2",
         "laravel/framework": "^12.0",
         "laravel/tinker": "^2.10.1",
-        "ternis/api-domain": "@dev"
+        "ternis/api-domain": "@dev",
+        "ternis/storage-drivers": "@dev"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

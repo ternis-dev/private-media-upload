@@ -4,7 +4,7 @@
 private-media-upload/
   .plans/               # this folder (vision → roadmap)
   apps/
-    api/                # Laravel 12 (php 8.3, composer)
+    api/                # Laravel 12 HTTP (thin controllers over packages/api-domain, no Eloquent)
       app/Models/… Http/Controllers/V1/… Jobs/… Services/Storage/
       config/filesystems.php  # s3:r2, sftp:vault-de, local:sovereign
       database/migrations/
