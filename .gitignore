@@ -1,5 +1,6 @@
-# PHP / Laravel
-/vendor/
+# PHP / Laravel (all packages + apps)
+**/vendor/
+**/.phpunit.result.cache
 .env
 .env.*
 !.env.example
