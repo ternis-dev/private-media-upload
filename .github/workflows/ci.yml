@@ -1,0 +1,29 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  plans-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check plans exist
+        run: test -f .plans/00-vision.md && test -f .plans/04-roadmap.md && echo "plans OK"
+      - name: Validate docker compose
+        run: docker compose -f infra/docker/compose.yml config
+  # M1+: uncomment as apps land
+  # php:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: shivammathur/setup-php@v2
+  #       with: { php-version: '8.3' }
+  #     - run: composer install --working-dir=apps/api && composer test --working-dir=apps/api
+  # web:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: pnpm/action-setup@v4
+  #     - run: pnpm install && pnpm test

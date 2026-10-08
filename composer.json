@@ -1,0 +1,9 @@
+{
+  "name": "ternis-dev/private-media-upload",
+  "description": "private.wf monorepo — private media upload & sharing (AGPL)",
+  "license": "AGPL-3.0-or-later",
+  "type": "project",
+  "require": {
+    "php": "^8.3"
+  }
+}

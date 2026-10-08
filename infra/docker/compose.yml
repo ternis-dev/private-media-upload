@@ -1,0 +1,41 @@
+services:
+  pgsql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-privatewf}
+      POSTGRES_USER: ${DB_USERNAME:-privatewf}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    ports: ["5432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  minio: # local fake for Cloudflare R2 / S3 L1
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes: ["miniodata:/data"]
+    ports: ["9000:9000", "9001:9001"]
+
+  sftp: # local fake for L2 provider vault (DE)
+    image: atmoz/sftp:latest
+    command: "vault:changeme:1001:100:vault"
+    volumes: ["sftpdata:/home/vault/vault"]
+    ports: ["2222:22"]
+
+  clamav:
+    image: clamav/clamav:latest
+    ports: ["3310:3310"]
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["8025:8025", "1025:1025"]
+
+volumes:
+  pgdata:
+  miniodata:
+  sftpdata:
