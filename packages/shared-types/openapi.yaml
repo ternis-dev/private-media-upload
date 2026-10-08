@@ -1,0 +1,45 @@
+openapi: 3.0.3
+info:
+  title: private.wf API
+  version: 0.0.1-M0
+  description: Single source of truth for apps/api + apps/web. M0: health/tiers/upload-init. M1: complete/chunked/blob/share-meta.
+servers:
+  - url: http://localhost:8000
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        '200':
+          description: ok
+  /v1/tiers:
+    get:
+      summary: Privacy tiers L1/L2/L3
+      responses:
+        '200':
+          description: tiers
+  /v1/uploads/init:
+    post:
+      summary: Validate + reserve upload (M0). M1 returns presigned/tus target.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier, filename, size]
+              properties:
+                tier: { type: string, enum: [L1, L2, L3] }
+                filename: { type: string, maxLength: 255 }
+                size: { type: integer, minimum: 1, maximum: 5368709120 }
+                mime: { type: string, default: application/octet-stream }
+      responses:
+        '201': { description: reserved }
+        '422': { description: validation error }
+  /v1/shares/{id}/meta:
+    get:
+      summary: Share metadata (no bytes)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[0-9A-Za-z]{8,32}$' } }
+      responses:
+        '200': { description: meta (M0 stub) }

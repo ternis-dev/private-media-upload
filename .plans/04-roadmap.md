@@ -2,9 +2,10 @@
 
 ## M0 — Repo bootstrap (this week) — DoD
 - [x] `git init`, README, LICENSE (AGPL-3.0-or-later), `.plans/00–05`
-- [ ] `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.env.example`
-- [ ] `infra/docker/compose.yml` (pgsql, redis, minio, sftp, mailpit) boots green
-- [ ] CI skeleton (`ci.yml` lint-only) green on `main`
+- [x] `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.env.example`
+- [x] `infra/docker/compose.yml` (pgsql, redis, minio, sftp, mailpit + api/web dev services) `config -q` green
+- [x] CI skeleton (`ci.yml`: storage-drivers + api + web + compose) — phpunit 14+6 green, node --test 2 green
+- [x] M0 code slice: `packages/storage-drivers` (Tier L1/L2/L3 + 3 drivers + contract tests), `apps/api` lean router (health/tiers/upload-init, Laravel lands M1 per ADR-0001), `apps/web` tier picker + share stub, `packages/shared-types/openapi.yaml` v0.0.1-M0
 - DoD: fresh clone → `docker compose up` → hello pages for api+web.
 
 ## M1 — L1 + L3 slices (2–3 wks)

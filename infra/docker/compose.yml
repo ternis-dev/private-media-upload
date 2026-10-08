@@ -35,6 +35,22 @@ services:
     image: axllent/mailpit:latest
     ports: ["8025:8025", "1025:1025"]
 
+  api: # M0 lean PHP router (Laravel lands M1 per ADR-0001)
+    build:
+      context: ../..
+      dockerfile: infra/docker/php.Dockerfile
+    volumes: ["../../apps/api:/app"]
+    ports: ["8000:8000"]
+    depends_on: [pgsql, redis]
+
+  web:
+    image: node:22-alpine
+    working_dir: /web
+    volumes: ["../../apps/web:/web"]
+    command: sh -c "npm install --no-audit --no-fund 2>/dev/null; npm run dev"
+    ports: ["3000:3000"]
+    depends_on: [api]
+
 volumes:
   pgdata:
   miniodata:

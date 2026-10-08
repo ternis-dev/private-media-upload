@@ -1,0 +1,22 @@
+{
+  "name": "ternis/private-wf-api",
+  "description": "private.wf API (M0 lean PHP; target: Laravel 12/13 API per ADR-0001)",
+  "license": "AGPL-3.0-or-later",
+  "type": "project",
+  "require": {
+    "php": "^8.3"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.0"
+  },
+  "autoload": {
+    "psr-4": { "PrivateWf\\Api\\": "src/" }
+  },
+  "autoload-dev": {
+    "psr-4": { "PrivateWf\\Api\\Tests\\": "tests/" }
+  },
+  "scripts": {
+    "test": "phpunit --colors=always",
+    "serve": "php -S localhost:8000 -t public"
+  }
+}

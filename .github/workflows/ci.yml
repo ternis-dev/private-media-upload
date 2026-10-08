@@ -5,25 +5,43 @@ on:
   pull_request:
 
 jobs:
-  plans-lint:
+  storage-drivers:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check plans exist
-        run: test -f .plans/00-vision.md && test -f .plans/04-roadmap.md && echo "plans OK"
-      - name: Validate docker compose
-        run: docker compose -f infra/docker/compose.yml config
-  # M1+: uncomment as apps land
-  # php:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: shivammathur/setup-php@v2
-  #       with: { php-version: '8.3' }
-  #     - run: composer install --working-dir=apps/api && composer test --working-dir=apps/api
-  # web:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: pnpm/action-setup@v4
-  #     - run: pnpm install && pnpm test
+      - uses: shivammathur/setup-php@v2
+        with: { php-version: '8.3' }
+      - run: composer install --no-interaction
+        working-directory: packages/storage-drivers
+      - run: vendor/bin/phpunit --colors=never
+        working-directory: packages/storage-drivers
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with: { php-version: '8.3' }
+      - run: composer install --no-interaction
+        working-directory: apps/api
+      - run: vendor/bin/phpunit --colors=never
+        working-directory: apps/api
+      - run: php -l public/index.php && php -l src/Shares.php
+        working-directory: apps/api
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: 'pnpm', cache-dependency-path: apps/web/pnpm-lock.yaml }
+      - run: pnpm install --dir apps/web || npm install --prefix apps/web
+      - run: node --test test/tiers.test.mjs
+        working-directory: apps/web
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f infra/docker/compose.yml config
